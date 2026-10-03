@@ -37,7 +37,7 @@ def get_store() -> InMemoryVerificationStore:
     summary="Execute Release Verification",
     description="Independently verifies upstream release identity, blockchain records, and multi-builder EIP-712 attestations.",
 )
-async def run_verification(
+def run_verification(
     request: VerificationRequest,
     service: VerificationService = Depends(get_service),
 ) -> VerificationResponse:
@@ -71,7 +71,7 @@ async def run_verification(
     summary="Get Verification Result",
     description="Retrieve a complete verification result by its unique verification ID.",
 )
-async def get_verification(
+def get_verification(
     verification_id: str,
     store: InMemoryVerificationStore = Depends(get_store),
 ) -> VerificationResponse:
@@ -92,7 +92,7 @@ async def get_verification(
     summary="Get Verification Evidence",
     description="Retrieve detailed audit and cryptographic evidence for a verification record.",
 )
-async def get_verification_evidence(
+def get_verification_evidence(
     verification_id: str,
     store: InMemoryVerificationStore = Depends(get_store),
 ) -> EvidenceResponse:
@@ -118,7 +118,7 @@ async def get_verification_evidence(
     summary="Get Builder Evidence Breakdown",
     description="Retrieve builder status and attestation breakdown for a verification record.",
 )
-async def get_verification_builders(
+def get_verification_builders(
     verification_id: str,
     store: InMemoryVerificationStore = Depends(get_store),
 ) -> BuildersResponse:

@@ -89,6 +89,18 @@
   }
 }
 
+@keyframes indeterminateProgress {
+  0% {
+    transform: translateX(-100%) scaleX(0.2);
+  }
+  50% {
+    transform: translateX(25%) scaleX(0.7);
+  }
+  100% {
+    transform: translateX(200%) scaleX(0.3);
+  }
+}
+
 .animate-fade-in-up {
   animation: fadeInUp 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
@@ -105,6 +117,11 @@
   stroke-dasharray: 400;
   stroke-dashoffset: 400;
   animation: drawLine 1.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-progress-indeterminate {
+  animation: indeterminateProgress 1.6s ease-in-out infinite;
+  transform-origin: left;
 }
 
 /* Prefers reduced motion overrides */

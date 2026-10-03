@@ -15,6 +15,7 @@ from app.schemas.verification import (
     VerificationRequest,
     VerificationResponse,
 )
+from app.services.builder_orchestrator import builder_orchestrator
 from app.services.verification_store import verification_store
 from quorum.blockchain import (
     BlockchainConnectionError,
@@ -84,7 +85,32 @@ class VerificationService:
             message=upstream_res.message,
         )
 
-        # 2. Blockchain and Quorum Engine Execution
+        # 2. Multi-Builder Docker Execution (if enabled and available)
+        signed_attestations = []
+        builder_executions_data = []
+
+        if not request.skip_docker_build and builder_orchestrator.verify_docker_available():
+            logger.info("Executing multi-builder Docker orchestration for %s...", request.release_id)
+            try:
+                exec_results = builder_orchestrator.execute_all_builders(
+                    run_id=verification_id,
+                    release_id=request.release_id,
+                    repository=request.repository,
+                    release_tag=request.release_tag,
+                    source_commit=request.source_commit,
+                    artifact_reference=request.artifact_reference or "junegunn/fzf/releases/download/v0.74.4/fzf",
+                    mode=request.verification_mode or "normal",
+                    failed_builder_id=request.simulated_failure_builder,
+                    demo_scenario=request.demo_scenario or "normal",
+                )
+                for er in exec_results:
+                    if er.signed_attestation is not None:
+                        signed_attestations.append(er.signed_attestation)
+                    builder_executions_data.append(er.model_dump(exclude={"signed_attestation"}))
+            except Exception as b_exc:
+                logger.error("Multi-builder Docker orchestration error: %s", b_exc)
+
+        # 3. Blockchain and Quorum Engine Execution
         reader = self.get_blockchain_reader()
         policy = load_trust_policy()
         engine = QuorumEngine(blockchain_reader=reader, policy=policy)
@@ -95,6 +121,7 @@ class VerificationService:
             release_tag=request.release_tag,
             source_commit=request.source_commit,
             expected_artifact_hash=request.expected_artifact_hash,
+            signed_attestations=signed_attestations if signed_attestations else None,
             verify_upstream=False,  # Already executed above for structured metadata
         )
 
@@ -114,6 +141,9 @@ class VerificationService:
             },
             "expected_artifact_hash": request.expected_artifact_hash,
             "artifact_reference": request.artifact_reference,
+            "builder_executions": builder_executions_data,
+            "verification_mode": request.verification_mode or "normal",
+            "demo_scenario": request.demo_scenario or "normal",
         }
 
         response = VerificationResponse(

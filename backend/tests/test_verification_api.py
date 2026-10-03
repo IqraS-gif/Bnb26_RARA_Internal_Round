@@ -120,8 +120,9 @@ def client():
     from app.api.routes.verification import get_service
     app.dependency_overrides[get_service] = lambda: mock_service
 
-    with TestClient(app) as test_client:
-        yield test_client
+    with patch("app.services.builder_orchestrator.builder_orchestrator.verify_docker_available", return_value=False):
+        with TestClient(app) as test_client:
+            yield test_client
     app.dependency_overrides.clear()
 
 

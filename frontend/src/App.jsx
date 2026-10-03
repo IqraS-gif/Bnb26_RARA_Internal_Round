@@ -9,15 +9,16 @@ import FinalCTA from './components/landing/FinalCTA';
 import Footer from './components/landing/Footer';
 import AppShell from './components/app/AppShell';
 import VerifyRelease from './pages/VerifyRelease';
+import VerificationResult from './pages/VerificationResult';
 
 export default function App() {
   const [currentRoute, setCurrentRoute] = useState(() => {
-    return window.location.pathname.startsWith('/verify') ? '/verify' : '/';
+    return window.location.pathname.startsWith('/verify') ? window.location.pathname : '/';
   });
 
   useEffect(() => {
     const handlePopState = () => {
-      setCurrentRoute(window.location.pathname.startsWith('/verify') ? '/verify' : '/');
+      setCurrentRoute(window.location.pathname.startsWith('/verify') ? window.location.pathname : '/');
     };
 
     window.addEventListener('popstate', handlePopState);
@@ -31,11 +32,23 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'instant' });
   };
 
-  // Dedicated /verify Application Workspace (No Landing Navbar)
-  if (currentRoute === '/verify') {
+  // Dedicated /verify and /verify/:id Application Workspace (No Landing Navbar)
+  if (currentRoute.startsWith('/verify/') && currentRoute.length > 8) {
+    const verificationId = currentRoute.replace('/verify/', '').split('?')[0];
     return (
-      <AppShell onNavigate={handleNavigate}>
-        <VerifyRelease onNavigate={handleNavigate} />
+      <AppShell onNavigate={handleNavigate} currentPath="/verify">
+        <VerificationResult
+          verificationId={verificationId}
+          onNavigate={handleNavigate}
+        />
+      </AppShell>
+    );
+  }
+
+  if (currentRoute === '/verify' || currentRoute.startsWith('/verify')) {
+    return (
+      <AppShell onNavigate={handleNavigate} currentPath="/verify">
+        <VerifyRelease onNavigate={handleNavigate} currentRoute={currentRoute} />
       </AppShell>
     );
   }

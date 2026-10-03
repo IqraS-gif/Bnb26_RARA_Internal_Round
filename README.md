@@ -121,9 +121,25 @@ GOARCH=amd64
 -buildvcs=false
 -mod=readonly
 -a
+-ldflags="-s -w -X main.version=0.74.4 -X main.revision=a140afeb"
 ```
 
-Two independent reference builds (Builder A and Builder B) produce identical SHA-256 hashes (`bed775...0a3`).
+All three independent builder containers (Builder A, Builder B, and Builder C) compile the source independently and produce identical SHA-256 hashes (`bed7753055d2c42d9c89e18b717645c9de05c8e0cc5cfb2fbf35959b9ac770a3`) and size (`4,690,072 bytes`).
+
+---
+
+## Docker Multi-Builder Execution Layer
+
+Quorum executes reproducible verification using real, concurrent Docker containers:
+
+- **Isolated Containers:** `quorum-builder-a-<run_id>`, `quorum-builder-b-<run_id>`, `quorum-builder-c-<run_id>`.
+- **Isolated Workspaces:** Each builder receives its own dedicated directory (`builders/workspaces/<run_id>/builder-X`).
+- **Strict Security:** No Docker socket is mounted, no privileged mode is enabled, and no host private keys enter the containers.
+- **Host-Side Independent Hashing:** The host reads the resulting binary and calculates the streaming SHA-256 digest independently.
+- **EIP-712 Signing:** Each builder signs an attestation payload using its dedicated Ethereum key.
+- **On-Chain Recording:** Valid attestations are submitted directly to the `AttestationRegistry` on local Anvil (Chain ID `31337`).
+
+> **Architectural Note:** For the MVP, builder diversity is implemented via isolated containerized build environments and independent cryptographic identities. This demonstrates environmental separation and reproducible verification without claiming multi-organization operational infrastructure.
 
 ---
 
@@ -139,9 +155,10 @@ To demonstrate how Quorum protects consumers when an artifact is modified, the d
 ### Controlled Scenario Mechanics
 
 1. Builders A and B execute the reproducible build and submit matching hashes.
-2. Builder C produces a deliberately modified binary artifact in this controlled demonstration.
-3. The consumer-side verifier detects that Builder C's hash differs from Builders A and B.
-4. Because a trusted builder directly conflicts with the matching set, Quorum's conservative policy returns **`REJECT`**.
+2. Builder C applies a deterministic harmless marker in this controlled demonstration (`# QUORUM_CONTROLLED_DEMO_BUILDER_C_TAMPERED_MARKER`).
+3. Builder C signs its own attestation with a cryptographically valid EIP-712 signature (proving authentic attestation of divergent output).
+4. The consumer-side verifier detects that Builder C's hash differs from Builders A and B.
+5. Because a trusted builder directly conflicts with the matching set, Quorum's conservative policy returns **`REJECT`**.
 
 > **Note:** Builder C is not compromised in reality; this is a synthetic demonstration of conflict detection and forensic identification. The genuine reference binary remains untouched.
 
@@ -277,24 +294,89 @@ quorum/
 
 ## Prerequisites
 
+- **Docker Desktop** (running and operational for isolated reproducible builder containers)
 - **Node.js** (v18+ recommended) & **npm**
 - **Python** (v3.10+ recommended)
 - **Git**
-- **Docker** (for reproducible builder environments)
-- **Foundry** (`forge` and `anvil`)
+- **Foundry** (`forge` and `anvil`) or Docker (for containerized Anvil node)
 
 ---
 
-## Installation & Setup
+## Step-by-Step Setup & Execution
 
-### 1. Clone the Repository
+### 1. Ensure Docker Desktop is Running
+
+Start the Docker Desktop application on your machine. You can verify that the Docker daemon is active by running:
 
 ```bash
-git clone https://github.com/IqraS-gif/Bnb26_RARA_Internal_Round.git
-cd Bnb26_RARA_Internal_Round
+docker info
 ```
 
-### 2. Frontend Setup
+Make sure the pinned base image is pulled:
+
+```bash
+docker pull golang:1.23.0-bookworm
+```
+
+---
+
+### 2. Start the Local Anvil Blockchain Node
+
+You can start Anvil either natively using Foundry or via Docker:
+
+**Option A: Using Docker (Recommended for Windows / cross-platform):**
+```bash
+docker run -d --name quorum-anvil -p 8545:8545 --entrypoint anvil ghcr.io/foundry-rs/foundry:latest --host 0.0.0.0 --port 8545
+```
+
+**Option B: Using Native Foundry CLI:**
+```bash
+anvil --chain-id 31337 --port 8545
+```
+
+---
+
+### 3. Deploy & Initialize Smart Contracts
+
+Run the automated contract deployment and builder registration script:
+
+```bash
+python scripts/deploy/deploy_and_init.py
+```
+
+This deploys `BuilderRegistry`, `ReleaseRegistry`, and `AttestationRegistry` to Anvil, registers Builder A, Builder B, and Builder C, and registers the reference release (`fzf-v0.74.4`).
+
+---
+
+### 4. Backend Setup & Startup
+
+From the repository root:
+
+```bash
+# Create and activate virtual environment
+python -m venv backend/.venv
+
+# Windows PowerShell:
+.\backend\.venv\Scripts\Activate.ps1
+
+# Linux / macOS:
+# source backend/.venv/bin/activate
+
+# Install dependencies
+pip install -r backend/requirements.txt
+pip install -e verifier
+
+# Start the FastAPI backend server
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --app-dir backend
+```
+
+The API will be operational at `http://127.0.0.1:8000`. Test health at `http://127.0.0.1:8000/api/v1/health`.
+
+---
+
+### 5. Frontend Setup & Startup
+
+In a separate terminal:
 
 ```bash
 cd frontend
@@ -302,79 +384,42 @@ npm install
 npm run dev
 ```
 
-The frontend application will be available at `http://localhost:5173`.
+Open your browser and navigate to **`http://localhost:5173/verify`**.
 
-### 3. Backend Setup
+---
 
-From the project root:
+### 6. Running Verification & Demo Scenarios
 
-```bash
-# Create Python virtual environment
-python -m venv .venv
+On the **`/verify`** workspace page:
 
-# Activate virtual environment (Windows PowerShell)
-.venv\Scripts\Activate.ps1
+1. Check that the **Blockchain Network** card shows **`Connected — Anvil Localnet (Chain ID: 31337)`**.
+2. Select any of the **10 Verification Scenarios**:
+   - **Normal Verification:** All 3 builders run real Docker builds → Expected: `ACCEPT` (3/3 agree).
+   - **Builder A / B / C Offline:** Simulates 1 offline builder → Expected: `ACCEPT WITH WARNING` (2/3 quorum reached).
+   - **Builders A+B / A+C / B+C Offline:** Simulates 2 offline builders → Expected: `REJECT` (insufficient quorum: 1 < 2).
+   - **Builder A / B / C Divergent:** Selected builder executes a real build and applies controlled tamper marker → Expected: `REJECT` (artifact conflict detected).
+3. Click the blue **"Run Verification →"** button.
+4. Watch the multi-step verification pipeline execute real Docker containers (`quorum-builder-a`, `quorum-builder-b`, `quorum-builder-c`), calculate SHA-256 hashes, sign EIP-712 attestations, record on-chain transactions, and transition to the full **Verification Result** dashboard (`/verify/:id`).
 
-# Activate virtual environment (Linux/macOS)
-# source .venv/bin/activate
+---
 
-# Install backend dependencies
-cd backend
-pip install -r requirements.txt
-
-# Start the FastAPI server
-uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
-```
-
-The API server will run at `http://127.0.0.1:8000`.
-
-### 4. Blockchain Setup (Local Anvil)
-
-In a separate terminal:
-
-```bash
-# Start local Anvil blockchain node
-anvil --chain-id 31337 --port 8545
-```
-
-Deploy the registry contracts using Foundry:
-
-```bash
-cd blockchain
-forge script scripts/Deploy.s.sol:DeployScript --rpc-url http://127.0.0.1:8545 --broadcast
-```
-
-### 5. Running Tests
+### 7. Running Test Suites
 
 **Backend Test Suite:**
 ```bash
-cd backend
-..\.venv\Scripts\python.exe -m pytest
+python -m pytest backend/tests
 ```
 
-**Verifier Test Suite:**
+**Verifier Engine Test Suite:**
 ```bash
-.venv\Scripts\python.exe -m pytest verifier
+python -m pytest verifier/tests
 ```
 
-**Foundry Contract Test Suite:**
+**Foundry Smart Contract Test Suite:**
 ```bash
 cd blockchain
 forge test
 ```
-
----
-
-## Running the Demo
-
-1. Start the local Anvil blockchain instance on port `8545`.
-2. Deploy the Quorum smart contract registries.
-3. Start the FastAPI backend server on port `8000`.
-4. Start the React frontend on port `5173`.
-5. Open `http://localhost:5173/verify` in your browser.
-6. Observe the pre-configured **`junegunn/fzf v0.74.4`** demonstration release.
-7. Click **"Run Verification"** to trigger the pipeline.
-8. Inspect live builder consensus, EIP-712 signature verification, artifact SHA-256 digests, and on-chain contract addresses.
 
 ---
 

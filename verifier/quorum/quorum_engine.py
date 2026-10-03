@@ -227,6 +227,22 @@ class QuorumEngine:
                 )
                 continue
 
+            # If explicit signed_attestations were provided for this verification run,
+            # evaluate availability against the provided run payload
+            if signed_attestations is not None and trusted_addr not in signed_map:
+                builder_results.append(
+                    BuilderVerificationResult(
+                        builder_address=trusted_addr,
+                        builder_name=b_name,
+                        policy_status="TRUSTED",
+                        registry_status="ACTIVE",
+                        signature_status="MISSING",
+                        status=BuilderStatus.MISSING,
+                        explanation="Builder did not submit an attestation for this verification run.",
+                    )
+                )
+                continue
+
             # Read latest on-chain attestation
             att_rec = self.blockchain.get_latest_attestation(b32_release_id, trusted_addr)
             if att_rec is None or att_rec.status == "SUPERSEDED":

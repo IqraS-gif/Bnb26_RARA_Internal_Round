@@ -45,12 +45,54 @@ class VerificationRequest(BaseModel):
         description="Optional reference name or URL for the target binary artifact",
         examples=["junegunn/fzf/releases/download/v0.74.4/fzf"],
     )
+    demo_scenario: Optional[str] = Field(
+        default="normal",
+        description="Controlled demonstration scenario name",
+        examples=["normal", "builder_c_divergent", "builder_a_offline"],
+    )
+    verification_mode: Optional[str] = Field(
+        default="normal",
+        description="Verification execution mode: 'normal' or 'controlled_attack'",
+        examples=["normal"],
+    )
+    skip_docker_build: Optional[bool] = Field(
+        default=False,
+        description="Optional flag to bypass container build (for offline verifier tests)",
+    )
+    simulated_failure_builder: Optional[str] = Field(
+        default=None,
+        description="Optional builder ID to simulate offline/failure state (e.g. 'builder-c')",
+    )
 
     model_config = ConfigDict(
         frozen=True,
         extra="forbid",  # Forbid client-supplied verdicts or internal fields
         str_strip_whitespace=True,
     )
+
+    @field_validator("demo_scenario")
+    @classmethod
+    def check_demo_scenario(cls, v: Optional[str]) -> str:
+        valid_scenarios = {
+            "normal",
+            "builder_a_offline",
+            "builder_b_offline",
+            "builder_c_offline",
+            "builders_a_b_offline",
+            "builders_a_c_offline",
+            "builders_b_c_offline",
+            "builder_a_divergent",
+            "builder_b_divergent",
+            "builder_c_divergent",
+        }
+        if v is None or v.strip() == "":
+            return "normal"
+        val = v.strip().lower()
+        if val not in valid_scenarios:
+            raise ValueError(
+                f"Invalid demo_scenario '{v}'. Allowed scenarios: {sorted(valid_scenarios)}"
+            )
+        return val
 
     @field_validator("release_id")
     @classmethod

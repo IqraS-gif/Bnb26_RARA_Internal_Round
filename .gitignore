@@ -45,6 +45,10 @@ typechain-types/
 *.log
 tmp/
 temp/
+builders/workspaces/
+artifacts/builder-a/fzf
+artifacts/builder-b/fzf
+artifacts/builder-c/fzf
 
 # IDEs & System
 .vscode/
