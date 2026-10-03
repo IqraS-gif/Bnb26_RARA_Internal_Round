@@ -1,0 +1,12 @@
+{
+  "scenario": "controlled-builder-c-artifact-divergence",
+  "originalArtifactHash": "bed7753055d2c42d9c89e18b717645c9de05c8e0cc5cfb2fbf35959b9ac770a3",
+  "modifiedArtifactHash": "3010ad9c3c9dd74a459df2d00481949b26bad298bd8d8cbd2a0ef26aa5767801",
+  "originalSizeBytes": 4690072,
+  "modifiedSizeBytes": 4690124,
+  "differenceDetected": true,
+  "executionPerformed": false,
+  "firstDifferenceOffset": 4690072,
+  "marker": "# QUORUM_CONTROLLED_DEMO_BUILDER_C_TAMPERED_MARKER",
+  "explanation": "Controlled demonstration of reproducible build divergence without malicious payload or binary execution."
+}
