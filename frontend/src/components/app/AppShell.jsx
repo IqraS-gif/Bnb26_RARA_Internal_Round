@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Menu, X } from 'lucide-react';
 import AppSidebar from './AppSidebar';
 
-export default function AppShell({ children, onNavigate }) {
+export default function AppShell({ children, onNavigate, currentPath = '/verify' }) {
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
 
   return (
@@ -12,7 +12,7 @@ export default function AppShell({ children, onNavigate }) {
       {/* DESKTOP PERSISTENT LEFT SIDEBAR */}
       {/* ==================================================== */}
       <div className="hidden md:block w-64 shrink-0 h-screen sticky top-0">
-        <AppSidebar onNavigate={onNavigate} />
+        <AppSidebar onNavigate={onNavigate} currentPath={currentPath} />
       </div>
 
       {/* ==================================================== */}
@@ -79,6 +79,7 @@ export default function AppShell({ children, onNavigate }) {
           {/* Drawer Sidebar */}
           <div className="relative w-72 max-w-[85vw] bg-white h-full shadow-2xl z-10 flex flex-col">
             <AppSidebar
+              currentPath={currentPath}
               onNavigate={(path) => {
                 setMobileDrawerOpen(false);
                 if (onNavigate) onNavigate(path);

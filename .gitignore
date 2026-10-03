@@ -41,11 +41,17 @@ typechain-types/
 *.pem
 *.key
 
+# Database & Storage
+*.db
+*.sqlite
+*.sqlite3
+
 # Logs & Temporary
 *.log
 tmp/
 temp/
 builders/workspaces/
+backend/builders/
 artifacts/builder-a/fzf
 artifacts/builder-b/fzf
 artifacts/builder-c/fzf

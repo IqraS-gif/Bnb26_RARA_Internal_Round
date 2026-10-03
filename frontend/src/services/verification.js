@@ -83,3 +83,167 @@ export async function getVerificationResult(verificationId) {
     throw new Error('Failed to retrieve verification record.');
   }
 }
+
+/**
+ * Query paginated verification history.
+ * @param {Object} [params] - Query parameters (search, verdict, verification_mode, repository, page, page_size)
+ * @returns {Promise<Object>} VerificationHistoryListResponse
+ */
+export async function getVerificationHistory(params = {}) {
+  try {
+    const response = await apiClient.get('/api/v1/verification/history', { params });
+    return response.data;
+  } catch (error) {
+    if (typeof error.response?.data?.detail === 'string') {
+      throw new Error(error.response.data.detail);
+    }
+    if (error.message) {
+      throw new Error(error.message);
+    }
+    throw new Error('Failed to retrieve verification history.');
+  }
+}
+
+/**
+ * Get aggregate summary counts for verification history.
+ * @returns {Promise<Object>} VerificationHistorySummaryResponse
+ */
+export async function getVerificationHistorySummary() {
+  try {
+    const response = await apiClient.get('/api/v1/verification/history/summary');
+    return response.data;
+  } catch (error) {
+    if (typeof error.response?.data?.detail === 'string') {
+      throw new Error(error.response.data.detail);
+    }
+    if (error.message) {
+      throw new Error(error.message);
+    }
+    throw new Error('Failed to retrieve verification history summary.');
+  }
+}
+
+/**
+ * Get detailed verification history record by verification ID.
+ * @param {string} verificationId
+ * @returns {Promise<Object>} VerificationHistoryDetailResponse
+ */
+export async function getVerificationHistoryDetail(verificationId) {
+  try {
+    const response = await apiClient.get(`/api/v1/verification/history/${verificationId}`);
+    return response.data;
+  } catch (error) {
+    if (error.response?.status === 404) {
+      throw new Error(`Verification history record '${verificationId}' not found.`);
+    }
+    if (typeof error.response?.data?.detail === 'string') {
+      throw new Error(error.response.data.detail);
+    }
+    if (error.message) {
+      throw new Error(error.message);
+    }
+    throw new Error('Failed to retrieve verification history detail.');
+  }
+}
+
+/**
+ * Query paginated builder evidence with filtering.
+ * @param {Object} [params] - Query parameters (search, builder, status, verification_id, repository, date_range, page, page_size)
+ * @returns {Promise<Object>} BuilderEvidenceListResponse
+ */
+export async function getBuilderEvidence(params = {}) {
+  try {
+    const response = await apiClient.get('/api/v1/builder-evidence', { params });
+    return response.data;
+  } catch (error) {
+    if (typeof error.response?.data?.detail === 'string') {
+      throw new Error(error.response.data.detail);
+    }
+    if (error.message) {
+      throw new Error(error.message);
+    }
+    throw new Error('Failed to retrieve builder evidence.');
+  }
+}
+
+/**
+ * Get aggregate summary counts for builder evidence.
+ * @returns {Promise<Object>} BuilderEvidenceSummaryResponse
+ */
+export async function getBuilderEvidenceSummary() {
+  try {
+    const response = await apiClient.get('/api/v1/builder-evidence/summary');
+    return response.data;
+  } catch (error) {
+    if (typeof error.response?.data?.detail === 'string') {
+      throw new Error(error.response.data.detail);
+    }
+    if (error.message) {
+      throw new Error(error.message);
+    }
+    throw new Error('Failed to retrieve builder evidence summary.');
+  }
+}
+
+/**
+ * Get blockchain summary status, chain ID, and contract addresses.
+ * @returns {Promise<Object>} BlockchainSummaryResponse
+ */
+export async function getBlockchainSummary() {
+  try {
+    const response = await apiClient.get('/api/v1/blockchain/summary');
+    return response.data;
+  } catch (error) {
+    if (typeof error.response?.data?.detail === 'string') {
+      throw new Error(error.response.data.detail);
+    }
+    if (error.message) {
+      throw new Error(error.message);
+    }
+    throw new Error('Failed to retrieve blockchain summary.');
+  }
+}
+
+/**
+ * Query paginated and decoded smart contract events.
+ * @param {Object} [params] - Query parameters (event_type, registry, search, page, page_size)
+ * @returns {Promise<Object>} BlockchainEventsResponse
+ */
+export async function getBlockchainEvents(params = {}) {
+  try {
+    const response = await apiClient.get('/api/v1/blockchain/events', { params });
+    return response.data;
+  } catch (error) {
+    if (typeof error.response?.data?.detail === 'string') {
+      throw new Error(error.response.data.detail);
+    }
+    if (error.message) {
+      throw new Error(error.message);
+    }
+    throw new Error('Failed to retrieve blockchain events.');
+  }
+}
+
+/**
+ * Get recent AttestationSubmitted records from Anvil.
+ * @param {number} [limit=5]
+ * @returns {Promise<Array>} List of RecentAttestationItem
+ */
+export async function getRecentAttestations(limit = 5) {
+  try {
+    const response = await apiClient.get('/api/v1/blockchain/attestations', {
+      params: { limit },
+    });
+    return response.data;
+  } catch (error) {
+    if (typeof error.response?.data?.detail === 'string') {
+      throw new Error(error.response.data.detail);
+    }
+    if (error.message) {
+      throw new Error(error.message);
+    }
+    throw new Error('Failed to retrieve recent attestations.');
+  }
+}
+
+

@@ -15,7 +15,9 @@ from app.schemas.verification import (
     VerificationRequest,
     VerificationResponse,
 )
+from app.db import SessionLocal
 from app.services.builder_orchestrator import builder_orchestrator
+from app.services.history_service import history_service
 from app.services.verification_store import verification_store
 from quorum.blockchain import (
     BlockchainConnectionError,
@@ -175,8 +177,16 @@ class VerificationService:
             },
         )
 
-        # Save to store
+        # Save to in-memory store
         verification_store.save(response)
+
+        # Persist to PostgreSQL database
+        try:
+            with SessionLocal() as db_session:
+                history_service.save_verification(response, db_session)
+        except Exception as db_exc:
+            logger.warning("Could not persist verification to database: %s", db_exc)
+
         return response
 
 

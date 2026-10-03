@@ -1,5 +1,6 @@
 """Quorum FastAPI Application entrypoint."""
 
+from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,6 +8,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import api_router
 from app.config import get_settings
 from app.core.errors import register_exception_handlers
+from app.db import init_db
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan events (startup & shutdown)."""
+    # Startup: initialize persistent database schema
+    init_db()
+    yield
 
 
 def create_application() -> FastAPI:
@@ -20,6 +30,7 @@ def create_application() -> FastAPI:
         docs_url=f"{settings.api_v1_prefix}/docs",
         redoc_url=f"{settings.api_v1_prefix}/redoc",
         openapi_url=f"{settings.api_v1_prefix}/openapi.json",
+        lifespan=lifespan,
     )
 
     # Configure CORS middleware

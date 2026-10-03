@@ -3,37 +3,43 @@ import { Play, History, Server, Blocks, BookOpen, Settings } from 'lucide-react'
 import ConnectionStatus from './ConnectionStatus';
 
 export default function AppSidebar({ currentPath = '/verify', onNavigate }) {
+  const isHistoryActive = currentPath === '/history' || currentPath === '/verification-history';
+  const isBuilderEvidenceActive = currentPath === '/builder-evidence' || currentPath === '/evidence';
+  const isBlockchainActive = currentPath === '/blockchain';
+  const isVerifyActive =
+    (currentPath === '/verify' || currentPath.startsWith('/verify/')) &&
+    !isHistoryActive &&
+    !isBuilderEvidenceActive &&
+    !isBlockchainActive;
+
   const navItems = [
     {
       label: 'Verify Release',
       path: '/verify',
       icon: Play,
-      active: true,
+      active: isVerifyActive,
       disabled: false,
     },
     {
       label: 'Verification History',
       path: '/history',
       icon: History,
-      active: false,
-      disabled: true,
-      badge: 'Soon',
+      active: isHistoryActive,
+      disabled: false,
     },
     {
       label: 'Builder Evidence',
-      path: '/evidence',
+      path: '/builder-evidence',
       icon: Server,
-      active: false,
-      disabled: true,
-      badge: 'Soon',
+      active: isBuilderEvidenceActive,
+      disabled: false,
     },
     {
       label: 'Blockchain',
       path: '/blockchain',
       icon: Blocks,
-      active: false,
-      disabled: true,
-      badge: 'Soon',
+      active: isBlockchainActive,
+      disabled: false,
     },
     {
       label: 'Documentation',
@@ -109,11 +115,27 @@ export default function AppSidebar({ currentPath = '/verify', onNavigate }) {
               );
             }
 
+            if (!item.disabled) {
+              return (
+                <button
+                  key={item.label}
+                  type="button"
+                  onClick={() => onNavigate && onNavigate(item.path)}
+                  className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-slate-600 hover:text-blue-600 hover:bg-slate-50 text-sm font-medium transition-colors cursor-pointer text-left group"
+                >
+                  <div className="flex items-center gap-3">
+                    <Icon className="w-4 h-4 text-slate-400 group-hover:text-blue-600 transition-colors shrink-0" aria-hidden="true" />
+                    <span>{item.label}</span>
+                  </div>
+                </button>
+              );
+            }
+
             return (
               <div
                 key={item.label}
                 className="flex items-center justify-between px-3.5 py-2.5 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-50 text-sm font-medium transition-colors cursor-default opacity-75 group"
-                title={item.disabled ? `${item.label} (Coming soon)` : item.label}
+                title={`${item.label} (Coming soon)`}
               >
                 <div className="flex items-center gap-3">
                   <Icon className="w-4 h-4 text-slate-400 group-hover:text-slate-600 transition-colors shrink-0" aria-hidden="true" />

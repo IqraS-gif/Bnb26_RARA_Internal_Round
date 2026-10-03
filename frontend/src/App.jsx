@@ -10,15 +10,38 @@ import Footer from './components/landing/Footer';
 import AppShell from './components/app/AppShell';
 import VerifyRelease from './pages/VerifyRelease';
 import VerificationResult from './pages/VerificationResult';
+import VerificationHistory from './pages/VerificationHistory';
+import BuilderEvidence from './pages/BuilderEvidence';
+import Blockchain from './pages/Blockchain';
 
 export default function App() {
   const [currentRoute, setCurrentRoute] = useState(() => {
-    return window.location.pathname.startsWith('/verify') ? window.location.pathname : '/';
+    const path = window.location.pathname;
+    return (
+      path.startsWith('/verify') ||
+      path === '/history' ||
+      path === '/verification-history' ||
+      path === '/builder-evidence' ||
+      path === '/evidence' ||
+      path === '/blockchain'
+    )
+      ? path
+      : '/';
   });
 
   useEffect(() => {
     const handlePopState = () => {
-      setCurrentRoute(window.location.pathname.startsWith('/verify') ? window.location.pathname : '/');
+      const path = window.location.pathname;
+      setCurrentRoute(
+        path.startsWith('/verify') ||
+          path === '/history' ||
+          path === '/verification-history' ||
+          path === '/builder-evidence' ||
+          path === '/evidence' ||
+          path === '/blockchain'
+          ? path
+          : '/'
+      );
     };
 
     window.addEventListener('popstate', handlePopState);
@@ -32,7 +55,7 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'instant' });
   };
 
-  // Dedicated /verify and /verify/:id Application Workspace (No Landing Navbar)
+  // Dedicated /verify/:id Result Page
   if (currentRoute.startsWith('/verify/') && currentRoute.length > 8) {
     const verificationId = currentRoute.replace('/verify/', '').split('?')[0];
     return (
@@ -45,6 +68,34 @@ export default function App() {
     );
   }
 
+  // Blockchain Evidence Page
+  if (currentRoute === '/blockchain') {
+    return (
+      <AppShell onNavigate={handleNavigate} currentPath="/blockchain">
+        <Blockchain onNavigate={handleNavigate} />
+      </AppShell>
+    );
+  }
+
+  // Builder Evidence Page
+  if (currentRoute === '/builder-evidence' || currentRoute === '/evidence') {
+    return (
+      <AppShell onNavigate={handleNavigate} currentPath="/builder-evidence">
+        <BuilderEvidence onNavigate={handleNavigate} />
+      </AppShell>
+    );
+  }
+
+  // Verification History Page
+  if (currentRoute === '/history' || currentRoute === '/verification-history') {
+    return (
+      <AppShell onNavigate={handleNavigate} currentPath="/history">
+        <VerificationHistory onNavigate={handleNavigate} />
+      </AppShell>
+    );
+  }
+
+  // /verify Page
   if (currentRoute === '/verify' || currentRoute.startsWith('/verify')) {
     return (
       <AppShell onNavigate={handleNavigate} currentPath="/verify">

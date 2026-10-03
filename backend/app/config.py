@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     chain_id: int = 31337
     registry_contract_address: str = ""
 
+    # Database Configuration (PostgreSQL persistent storage)
+    database_url: str = (
+        "postgresql+psycopg://postgres:postgres@localhost:5432/quorum"
+    )
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
