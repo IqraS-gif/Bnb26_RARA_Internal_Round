@@ -18,6 +18,11 @@ from app.schemas.verification import (
     VerificationRequest,
     VerificationResponse,
 )
+from app.services.blockchain_writer import (
+    BlockchainSubmissionError,
+    ReleaseRegistrationConflictError,
+    blockchain_writer,
+)
 from app.services.builder_orchestrator import builder_orchestrator
 from app.services.go_toolchain import (
     DEFAULT_GO_TOOLCHAIN,
@@ -177,6 +182,36 @@ class VerificationService:
             message=upstream_res.message,
         )
 
+        # Step 2.5: Ensure Release is Registered in ReleaseRegistry on Anvil
+        release_reg_evidence: Optional[Dict[str, Any]] = None
+        if upstream_res.commit_matches:
+            try:
+                release_reg_evidence = blockchain_writer.ensure_release_registered(
+                    release_id=derived_release_id,
+                    repository=canonical_url,
+                    release_tag=request.release_tag,
+                    source_commit=resolved_commit,
+                )
+            except ReleaseRegistrationConflictError as rce:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=str(rce),
+                )
+            except BlockchainSubmissionError as bse:
+                logger.warning("Blockchain release registration error: %s", bse)
+                if not request.skip_docker_build:
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail=f"Failed to register release on blockchain: {bse}",
+                    )
+            except Exception as exc:
+                logger.warning("Unexpected error ensuring release registered: %s", exc)
+                if not request.skip_docker_build:
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail=f"Failed to register release on blockchain: {exc}",
+                    )
+
         # Step 3: Multi-Builder Docker Execution
         if progress_callback:
             progress_callback(3, "fetch_attestations")
@@ -292,6 +327,7 @@ class VerificationService:
             "expected_artifact_hash": request.expected_artifact_hash,
             "artifact_reference": derived_artifact_ref,
             "builder_executions": builder_executions_data,
+            "release_registration": release_reg_evidence,
             "official_artifact": official_artifact_data,
             "verification_mode": request.verification_mode or "normal",
             "demo_scenario": request.demo_scenario or "normal",
