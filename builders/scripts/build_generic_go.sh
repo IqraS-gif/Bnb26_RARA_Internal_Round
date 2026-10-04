@@ -98,6 +98,10 @@ echo "[BUILDER] Compiling artifact binary..."
 export CGO_ENABLED=0
 export GOOS=linux
 export GOARCH=amd64
+export GOTOOLCHAIN=local
+
+ACTUAL_GO_VERSION=$(go version | awk '{print $3}')
+echo "[BUILDER] Using toolchain: ${ACTUAL_GO_VERSION} (GOTOOLCHAIN=local)"
 
 LDFLAGS="-s -w"
 if [ "${TARGET_BINARY_NAME}" = "fzf" ] && [ "${EXPECTED_COMMIT}" = "a140afeb4d733cad3c96a56bf6db7e26853b6757" ]; then
@@ -137,11 +141,13 @@ cat <<EOF > "${OUTPUT_DIR}/build-metadata.json"
   "sizeBytes": ${ARTIFACT_SIZE},
   "buildMode": "${BUILD_MODE}",
   "platform": "linux/amd64",
+  "goVersion": "${ACTUAL_GO_VERSION}",
   "buildTarget": "${BUILD_TARGET}",
   "buildFlags": [
     "CGO_ENABLED=0",
     "GOOS=linux",
     "GOARCH=amd64",
+    "GOTOOLCHAIN=local",
     "-trimpath",
     "-buildvcs=false",
     "-mod=readonly",

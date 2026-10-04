@@ -397,27 +397,52 @@ def resolve_tag_commit(
     )
 
 
-def check_go_module_supported(owner: str, repo: str, commit_or_tag: str) -> Tuple[bool, str]:
-    """Check if repository contains a valid go.mod at the given commit/tag."""
+def fetch_go_mod_content(repository: str, commit_or_tag: str, timeout: float = 8.0) -> Optional[str]:
+    """Fetch raw go.mod content from upstream repository at the given commit or tag."""
     import urllib.request
     import urllib.error
 
+    is_valid, owner, repo, canonical_url, _ = validate_github_repository(repository)
+    if is_valid and owner and repo:
+        raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{commit_or_tag}/go.mod"
+        req = urllib.request.Request(raw_url, headers={"User-Agent": "Quorum-Verification/1.0"})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as res:
+                if res.status == 200:
+                    return res.read(65536).decode("utf-8", errors="ignore")
+        except urllib.error.HTTPError as he:
+            if he.code == 404:
+                return None
+            logger.debug("HTTP error fetching go.mod from %s: %s", raw_url, he)
+        except Exception as exc:
+            logger.debug("Network error fetching go.mod from %s: %s", raw_url, exc)
+
+    return None
+
+
+def check_go_module_supported(owner: str, repo: str, commit_or_tag: str) -> Tuple[bool, str]:
+    """Check if repository contains a valid go.mod at the given commit/tag."""
+    content = fetch_go_mod_content(f"{owner}/{repo}", commit_or_tag)
+    if content is not None:
+        if "module" in content or "go " in content:
+            return True, "Go module detected."
+        return True, "go.mod found."
+
+    # If fetch_go_mod_content returned None explicitly due to 404 or missing go.mod
+    import urllib.request
+    import urllib.error
     raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{commit_or_tag}/go.mod"
     req = urllib.request.Request(raw_url, headers={"User-Agent": "Quorum-Verification/1.0"})
-
     try:
-        with urllib.request.urlopen(req, timeout=8.0) as res:
+        with urllib.request.urlopen(req, timeout=4.0) as res:
             if res.status == 200:
-                content = res.read(512).decode("utf-8", errors="ignore")
-                if "module" in content:
-                    return True, "Go module detected."
                 return True, "go.mod found."
     except urllib.error.HTTPError as he:
         if he.code == 404:
             return False, "Unsupported project type: No go.mod found. Quorum currently supports reproducible verification for Go repositories."
-    except Exception as exc:
-        logger.debug("Raw go.mod check fallback: %s", exc)
+    except Exception:
+        pass
 
-    # In case raw.githubusercontent is unreachable from network, default to allowing container build stage to enforce go.mod
+    # In case raw.githubusercontent is unreachable from network, allow container build stage to enforce go.mod
     return True, "Go module check deferred to container build environment."
 

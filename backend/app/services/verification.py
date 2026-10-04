@@ -19,6 +19,12 @@ from app.schemas.verification import (
     VerificationResponse,
 )
 from app.services.builder_orchestrator import builder_orchestrator
+from app.services.go_toolchain import (
+    DEFAULT_GO_TOOLCHAIN,
+    MalformedGoModError,
+    UnsupportedGoVersionError,
+    select_compatible_toolchain,
+)
 from app.services.history_service import history_service
 from app.services.official_artifact import (
     OfficialArtifactError,
@@ -26,6 +32,7 @@ from app.services.official_artifact import (
 )
 from app.services.upstream import (
     check_go_module_supported,
+    fetch_go_mod_content,
     resolve_tag_commit,
     validate_github_repository,
     verify_release,
@@ -128,14 +135,34 @@ class VerificationService:
 
         resolved_commit = upstream_res.resolved_commit or request.source_commit or "0000000000000000000000000000000000000000"
 
-        # Check ecosystem support (Go module detection) for arbitrary repositories
-        if upstream_res.commit_matches and not (owner.lower() == "junegunn" and repo_name.lower() == "fzf"):
-            is_go_supported, eco_msg = check_go_module_supported(owner, repo_name, resolved_commit)
-            if not is_go_supported:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Unsupported project type: Quorum currently supports reproducible verification for Go repositories.",
-                )
+        # Check ecosystem support and resolve compatible Go toolchain
+        selected_toolchain = DEFAULT_GO_TOOLCHAIN
+        fetched_go_mod = None
+
+        if upstream_res.commit_matches:
+            if not (owner.lower() == "junegunn" and repo_name.lower() == "fzf"):
+                is_go_supported, eco_msg = check_go_module_supported(owner, repo_name, resolved_commit)
+                if not is_go_supported:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Unsupported project type: Quorum currently supports reproducible verification for Go repositories.",
+                    )
+
+            # Retrieve go.mod to determine exact Go toolchain requirements
+            fetched_go_mod = fetch_go_mod_content(canonical_url, resolved_commit)
+            if fetched_go_mod:
+                try:
+                    selected_toolchain = select_compatible_toolchain(fetched_go_mod)
+                except UnsupportedGoVersionError as ugve:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=str(ugve),
+                    )
+                except MalformedGoModError as mgme:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=str(mgme),
+                    )
 
         derived_release_id = request.release_id or f"{repo_name}-{request.release_tag}"
         derived_artifact_ref = (
@@ -158,7 +185,13 @@ class VerificationService:
         builder_executions_data = []
 
         if not request.skip_docker_build and builder_orchestrator.verify_docker_available():
-            logger.info("Executing multi-builder Docker orchestration for %s (%s)...", derived_release_id, canonical_url)
+            logger.info(
+                "Executing multi-builder Docker orchestration for %s (%s) using toolchain %s (%s)...",
+                derived_release_id,
+                canonical_url,
+                selected_toolchain.name,
+                selected_toolchain.image,
+            )
             try:
                 exec_results = builder_orchestrator.execute_all_builders(
                     run_id=verification_id,
@@ -171,6 +204,9 @@ class VerificationService:
                     mode=request.verification_mode or "normal",
                     failed_builder_id=request.simulated_failure_builder,
                     demo_scenario=request.demo_scenario or "normal",
+                    image=selected_toolchain.image,
+                    image_digest=selected_toolchain.image_digest,
+                    go_mod_content=fetched_go_mod,
                 )
                 for er in exec_results:
                     if er.signed_attestation is not None:

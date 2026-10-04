@@ -53,9 +53,10 @@ temp/
 scratch/
 builders/workspaces/
 backend/builders/
-artifacts/builder-a/fzf
-artifacts/builder-b/fzf
-artifacts/builder-c/fzf
+artifacts/builder-a/
+artifacts/builder-b/
+artifacts/builder-c/
+artifacts/*/
 
 # IDEs & System
 .vscode/

@@ -29,6 +29,14 @@ from app.schemas.attestation import ArtifactEvidence, Attestation
 from app.schemas.signing import EIP712Domain, SignedAttestation
 from app.services.artifacts import calculate_sha256
 from app.services.blockchain_writer import blockchain_writer
+from app.services.go_toolchain import (
+    DEFAULT_GO_TOOLCHAIN,
+    SUPPORTED_GO_TOOLCHAINS,
+    PinnedGoToolchain,
+    UnsupportedGoVersionError,
+    MalformedGoModError,
+    select_compatible_toolchain,
+)
 from app.services.signatures import sign_attestation, verify_attestation_signature
 from builders.common.identities import BUILDER_IDENTITIES, BuilderIdentity, get_all_builder_identities
 
@@ -40,9 +48,9 @@ _GENERIC_BUILD_SCRIPT_PATH = _ROOT_DIR / "builders" / "scripts" / "build_generic
 _BUILD_SCRIPT_PATH = _GENERIC_BUILD_SCRIPT_PATH if _GENERIC_BUILD_SCRIPT_PATH.exists() else _FZF_BUILD_SCRIPT_PATH
 _WORKSPACES_ROOT = _ROOT_DIR / "builders" / "workspaces"
 
-# Pinned reproducibility image and digest
-PINNED_IMAGE = "golang:1.23.0-bookworm"
-PINNED_DIGEST = "sha256:32096e84705b30bb39cc9c65ef2896efacc4268203b7876049847763cefc934d"
+# Pinned reproducibility image and digest (default)
+PINNED_IMAGE = DEFAULT_GO_TOOLCHAIN.image
+PINNED_DIGEST = DEFAULT_GO_TOOLCHAIN.image_digest
 
 
 class BuilderExecutionResult(BaseModel):
@@ -61,6 +69,7 @@ class BuilderExecutionResult(BaseModel):
     build_mode: str = "normal"
     image: str = PINNED_IMAGE
     image_digest: str = PINNED_DIGEST
+    go_version: Optional[str] = None
     platform: str = "linux/amd64"
     build_flags: List[str] = Field(default_factory=list)
     logs: str = ""
@@ -148,8 +157,13 @@ class BuilderOrchestrator:
         mode: str = "normal",
         simulate_failure: bool = False,
         is_divergent: bool = False,
+        image: Optional[str] = None,
+        image_digest: Optional[str] = None,
     ) -> BuilderExecutionResult:
         """Execute a reproducible build inside a dedicated, isolated Docker container."""
+        chosen_image = image or self.image
+        chosen_digest = image_digest or self.pinned_digest
+
         container_name = f"quorum-{builder.builder_id}-{run_id[:8]}"
         builder_workspace = _WORKSPACES_ROOT / run_id / builder.builder_id
         output_dir = builder_workspace / "output"
@@ -162,12 +176,13 @@ class BuilderOrchestrator:
 
         start_time = time.time()
         logger.info(
-            "Starting builder container '%s' for builder '%s' (repo: %s, binary: %s, mode: %s, failure: %s, divergent: %s)...",
+            "Starting builder container '%s' for builder '%s' (repo: %s, binary: %s, mode: %s, image: %s, failure: %s, divergent: %s)...",
             container_name,
             builder.name,
             repository,
             target_binary_name,
             mode,
+            chosen_image,
             simulate_failure,
             is_divergent,
         )
@@ -183,6 +198,8 @@ class BuilderOrchestrator:
                 exit_code=1,
                 duration_seconds=duration,
                 build_mode=mode,
+                image=chosen_image,
+                image_digest=chosen_digest,
                 logs="Simulated builder failure / offline state.",
                 error_message="Builder is unavailable (offline demonstration scenario).",
             )
@@ -206,7 +223,7 @@ class BuilderOrchestrator:
             f"{output_abs}:/build/output:rw",
             "-w",
             "/build",
-            self.image,
+            chosen_image,
             "bash",
             "/build/build_script.sh",
             repository,
@@ -273,18 +290,22 @@ class BuilderOrchestrator:
                 "CGO_ENABLED=0",
                 "GOOS=linux",
                 "GOARCH=amd64",
+                "GOTOOLCHAIN=local",
                 "-trimpath",
                 "-buildvcs=false",
                 "-mod=readonly",
                 "-a",
                 "-ldflags=-s -w",
             ]
+            go_version = None
             meta_file = output_dir / "build-metadata.json"
             if meta_file.exists():
                 try:
                     meta_json = json.loads(meta_file.read_text(encoding="utf-8"))
                     if "buildFlags" in meta_json and isinstance(meta_json["buildFlags"], list):
                         build_flags = meta_json["buildFlags"]
+                    if "goVersion" in meta_json:
+                        go_version = str(meta_json["goVersion"])
                 except Exception:
                     pass
 
@@ -306,6 +327,9 @@ class BuilderOrchestrator:
                 artifact_hash=host_hash,
                 artifact_size=size_bytes,
                 build_mode=mode,
+                image=chosen_image,
+                image_digest=chosen_digest,
+                go_version=go_version,
                 build_flags=build_flags,
                 logs=logs,
             )
@@ -319,6 +343,8 @@ class BuilderOrchestrator:
                 exit_code=exit_code,
                 duration_seconds=duration,
                 build_mode=mode,
+                image=chosen_image,
+                image_digest=chosen_digest,
                 logs=logs,
                 error_message=error_msg or "Artifact not created or empty",
             )
@@ -337,10 +363,25 @@ class BuilderOrchestrator:
         offline_builder_ids: Optional[List[str]] = None,
         divergent_builder_id: Optional[str] = None,
         demo_scenario: Optional[str] = None,
+        image: Optional[str] = None,
+        image_digest: Optional[str] = None,
+        go_mod_content: Optional[str] = None,
     ) -> List[BuilderExecutionResult]:
         """Execute Builder A, Builder B, and Builder C concurrently in Docker."""
         builders = get_all_builder_identities()
         results_map: Dict[str, BuilderExecutionResult] = {}
+
+        # Resolve Go toolchain image and digest if not explicitly provided
+        chosen_image = image or self.image
+        chosen_digest = image_digest or self.pinned_digest
+
+        if image is None and go_mod_content:
+            try:
+                toolchain = select_compatible_toolchain(go_mod_content)
+                chosen_image = toolchain.image
+                chosen_digest = toolchain.image_digest
+            except Exception as tc_exc:
+                logger.warning("Toolchain selection from go.mod failed: %s", tc_exc)
 
         # Resolve binary name
         if not target_binary_name:
@@ -379,11 +420,12 @@ class BuilderOrchestrator:
                 target_divergent_id = "builder-c"
 
         logger.info(
-            "Orchestrating %d builders in parallel (run_id: %s, repo: %s, binary: %s, scenario: %s, offline: %s, divergent: %s)...",
+            "Orchestrating %d builders in parallel (run_id: %s, repo: %s, binary: %s, image: %s, scenario: %s, offline: %s, divergent: %s)...",
             len(builders),
             run_id,
             repository,
             target_binary_name,
+            chosen_image,
             demo_scenario,
             offline_set,
             target_divergent_id,
@@ -417,6 +459,8 @@ class BuilderOrchestrator:
                     mode=mode,
                     simulate_failure=(b.builder_id in offline_set),
                     is_divergent=(b.builder_id == target_divergent_id),
+                    image=chosen_image,
+                    image_digest=chosen_digest,
                 ): b
                 for b in builders
             }
