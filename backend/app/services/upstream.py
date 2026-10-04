@@ -3,7 +3,7 @@
 import logging
 import re
 import subprocess
-from typing import Optional
+from typing import Optional, Tuple
 
 from app.schemas.upstream import (
     UpstreamVerificationResult,
