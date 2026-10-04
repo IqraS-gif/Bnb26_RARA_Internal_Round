@@ -274,5 +274,21 @@ class HistoryService:
             builders=builders,
         )
 
+    def clear_all_history(self, db: Session) -> int:
+        """Permanently delete all verification history and builder records."""
+        try:
+            # Delete child builder records first
+            db.execute(select(VerificationBuilderRecord))
+            db.query(VerificationBuilderRecord).delete()
+            # Delete parent verification records
+            deleted_count = db.query(VerificationRecord).delete()
+            db.commit()
+            logger.info("Cleared %d verification history records from database.", deleted_count)
+            return deleted_count
+        except Exception as exc:
+            db.rollback()
+            logger.error("Failed to clear verification history: %s", exc)
+            raise
+
 
 history_service = HistoryService()

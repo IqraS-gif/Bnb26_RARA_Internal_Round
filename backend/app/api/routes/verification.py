@@ -144,6 +144,27 @@ def get_verification_history_detail(
     return detail
 
 
+@router.delete(
+    "/history",
+    status_code=status.HTTP_200_OK,
+    summary="Clear All Verification History",
+    description="Permanently delete all verification runs and builder records from database and memory.",
+)
+def clear_verification_history(
+    db: Session = Depends(get_db),
+    store: InMemoryVerificationStore = Depends(get_store),
+) -> dict:
+    """Clear all historical verification records."""
+    deleted_count = history_service.clear_all_history(db)
+    # Clear in-memory store
+    store._records.clear()
+    return {
+        "status": "success",
+        "deleted_count": deleted_count,
+        "message": f"Successfully cleared {deleted_count} verification history records.",
+    }
+
+
 # =========================================================================
 # SINGLE VERIFICATION RECORD ENDPOINTS
 # =========================================================================

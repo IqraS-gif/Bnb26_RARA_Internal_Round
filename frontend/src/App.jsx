@@ -14,6 +14,7 @@ import VerificationHistory from './pages/VerificationHistory';
 import BuilderEvidence from './pages/BuilderEvidence';
 import Blockchain from './pages/Blockchain';
 import Documentation from './pages/Documentation';
+import Settings from './pages/Settings';
 
 export default function App() {
   const [currentRoute, setCurrentRoute] = useState(() => {
@@ -26,7 +27,8 @@ export default function App() {
       path === '/evidence' ||
       path === '/blockchain' ||
       path === '/documentation' ||
-      path === '/docs'
+      path === '/docs' ||
+      path === '/settings'
     )
       ? path
       : '/';
@@ -43,7 +45,8 @@ export default function App() {
           path === '/evidence' ||
           path === '/blockchain' ||
           path === '/documentation' ||
-          path === '/docs'
+          path === '/docs' ||
+          path === '/settings'
           ? path
           : '/'
       );
@@ -69,6 +72,15 @@ export default function App() {
           verificationId={verificationId}
           onNavigate={handleNavigate}
         />
+      </AppShell>
+    );
+  }
+
+  // Settings Page
+  if (currentRoute === '/settings') {
+    return (
+      <AppShell onNavigate={handleNavigate} currentPath="/settings">
+        <Settings onNavigate={handleNavigate} />
       </AppShell>
     );
   }

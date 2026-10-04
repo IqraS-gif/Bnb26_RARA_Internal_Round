@@ -246,4 +246,65 @@ export async function getRecentAttestations(limit = 5) {
   }
 }
 
+/**
+ * Get unified system status and metrics.
+ * @returns {Promise<Object>} SystemStatusResponse
+ */
+export async function getSystemStatus() {
+  try {
+    const response = await apiClient.get('/api/v1/system/status');
+    return response.data;
+  } catch (error) {
+    if (typeof error.response?.data?.detail === 'string') {
+      throw new Error(error.response.data.detail);
+    }
+    if (error.message) {
+      throw new Error(error.message);
+    }
+    throw new Error('Failed to retrieve system status.');
+  }
+}
+
+/**
+ * Test live RPC connection and latency.
+ * @param {string} [rpcUrl]
+ * @returns {Promise<Object>} RpcTestResponse
+ */
+export async function testRpcConnection(rpcUrl = null) {
+  try {
+    const response = await apiClient.post('/api/v1/system/test-rpc', {
+      rpc_url: rpcUrl,
+    });
+    return response.data;
+  } catch (error) {
+    if (typeof error.response?.data?.detail === 'string') {
+      throw new Error(error.response.data.detail);
+    }
+    if (error.message) {
+      throw new Error(error.message);
+    }
+    throw new Error('Failed to test RPC connection.');
+  }
+}
+
+/**
+ * Permanently delete all verification history and builder records.
+ * @returns {Promise<Object>}
+ */
+export async function clearAllVerificationHistory() {
+  try {
+    const response = await apiClient.delete('/api/v1/verification/history');
+    return response.data;
+  } catch (error) {
+    if (typeof error.response?.data?.detail === 'string') {
+      throw new Error(error.response.data.detail);
+    }
+    if (error.message) {
+      throw new Error(error.message);
+    }
+    throw new Error('Failed to clear verification history.');
+  }
+}
+
+
 

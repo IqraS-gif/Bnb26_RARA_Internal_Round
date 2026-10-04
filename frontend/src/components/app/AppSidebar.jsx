@@ -7,12 +7,14 @@ export default function AppSidebar({ currentPath = '/verify', onNavigate }) {
   const isBuilderEvidenceActive = currentPath === '/builder-evidence' || currentPath === '/evidence';
   const isBlockchainActive = currentPath === '/blockchain';
   const isDocsActive = currentPath === '/documentation' || currentPath === '/docs';
+  const isSettingsActive = currentPath === '/settings';
   const isVerifyActive =
     (currentPath === '/verify' || currentPath.startsWith('/verify/')) &&
     !isHistoryActive &&
     !isBuilderEvidenceActive &&
     !isBlockchainActive &&
-    !isDocsActive;
+    !isDocsActive &&
+    !isSettingsActive;
 
   const navItems = [
     {
@@ -54,9 +56,8 @@ export default function AppSidebar({ currentPath = '/verify', onNavigate }) {
       label: 'Settings',
       path: '/settings',
       icon: Settings,
-      active: false,
-      disabled: true,
-      badge: 'Soon',
+      active: isSettingsActive,
+      disabled: false,
     },
   ];
 
