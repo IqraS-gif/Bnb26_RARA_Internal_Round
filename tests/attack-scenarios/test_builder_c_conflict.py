@@ -14,6 +14,8 @@ if str(ROOT_DIR / "backend") not in sys.path:
     sys.path.insert(0, str(ROOT_DIR / "backend"))
 if str(ROOT_DIR / "verifier") not in sys.path:
     sys.path.insert(0, str(ROOT_DIR / "verifier"))
+if str(ROOT_DIR / "verifier" / "tests") not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR / "verifier" / "tests"))
 
 from app.schemas.attestation import Attestation
 from app.schemas.signing import EIP712Domain
@@ -23,7 +25,7 @@ from quorum.policy import TrustPolicy
 from quorum.quorum_engine import QuorumEngine
 from quorum.signatures import verify_signed_attestation
 from quorum.verdicts import BuilderStatus, VerificationStatus
-from tests.test_quorum_engine import (
+from test_quorum_engine import (
     BUILDER_A_ADDR,
     BUILDER_A_KEY,
     BUILDER_B_ADDR,

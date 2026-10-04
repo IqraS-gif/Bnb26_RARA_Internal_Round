@@ -512,3 +512,183 @@ def test_claimed_commit_mismatch_rejects(mock_chain, standard_policy):
 
     assert result.status == VerificationStatus.REJECT
     assert "does not match" in result.explanation
+
+
+# ---------------------------------------------------------------------------
+# Specific Artifact Verification Semantics Tests (Requirement 8)
+# ---------------------------------------------------------------------------
+
+def test_three_of_three_agree_no_official_artifact_accept(mock_chain, standard_policy):
+    """8.1: 3/3 builders agree, no official artifact supplied -> ACCEPT."""
+    real_fzf_hash = "7cb0e8d6fbf7b81cc406a7e640a6fa4b90ac0cf0ed4eebd3d1704e2779e27489"
+    for addr in [BUILDER_A_ADDR, BUILDER_B_ADDR, BUILDER_C_ADDR]:
+        mock_chain.attestations[(RELEASE_ID, addr)] = OnChainAttestationRecord(
+            release_id=RELEASE_ID,
+            builder_address=addr,
+            artifact_hash=real_fzf_hash,
+            attestation_hash="0xhash",
+            attestation_reference="ref",
+            timestamp=1700000100,
+            status="ACTIVE",
+        )
+
+    engine = QuorumEngine(blockchain_reader=mock_chain, policy=standard_policy)
+    result = engine.verify(
+        release_id=RELEASE_ID,
+        expected_artifact_hash=None,  # No official artifact supplied
+    )
+
+    assert result.status == VerificationStatus.ACCEPT
+    assert result.valid_builder_count == 3
+    assert result.missing_builder_count == 0
+    assert result.conflicting_builder_count == 0
+    assert result.quorum_artifact_hash == real_fzf_hash
+    assert "full agreement" in result.explanation
+
+
+def test_two_of_three_agree_no_official_artifact_accept(mock_chain, standard_policy):
+    """8.2: 2/3 builders agree, 1 missing, no official artifact supplied -> ACCEPT_WITH_WARNING."""
+    real_fzf_hash = "7cb0e8d6fbf7b81cc406a7e640a6fa4b90ac0cf0ed4eebd3d1704e2779e27489"
+    for addr in [BUILDER_A_ADDR, BUILDER_B_ADDR]:
+        mock_chain.attestations[(RELEASE_ID, addr)] = OnChainAttestationRecord(
+            release_id=RELEASE_ID,
+            builder_address=addr,
+            artifact_hash=real_fzf_hash,
+            attestation_hash="0xhash",
+            attestation_reference="ref",
+            timestamp=1700000100,
+            status="ACTIVE",
+        )
+
+    engine = QuorumEngine(blockchain_reader=mock_chain, policy=standard_policy)
+    result = engine.verify(
+        release_id=RELEASE_ID,
+        expected_artifact_hash=None,
+    )
+
+    assert result.status == VerificationStatus.ACCEPT_WITH_WARNING
+    assert result.valid_builder_count == 2
+    assert result.missing_builder_count == 1
+    assert result.conflicting_builder_count == 0
+    assert result.quorum_artifact_hash == real_fzf_hash
+
+
+def test_three_builders_conflict_reject(mock_chain, standard_policy):
+    """8.3: 3 builders conflict with 3 different hashes -> REJECT."""
+    hashes = [
+        "1111111111111111111111111111111111111111111111111111111111111111",
+        "2222222222222222222222222222222222222222222222222222222222222222",
+        "3333333333333333333333333333333333333333333333333333333333333333",
+    ]
+    for addr, h in zip([BUILDER_A_ADDR, BUILDER_B_ADDR, BUILDER_C_ADDR], hashes):
+        mock_chain.attestations[(RELEASE_ID, addr)] = OnChainAttestationRecord(
+            release_id=RELEASE_ID,
+            builder_address=addr,
+            artifact_hash=h,
+            attestation_hash="0xhash",
+            attestation_reference="ref",
+            timestamp=1700000100,
+            status="ACTIVE",
+        )
+
+    engine = QuorumEngine(blockchain_reader=mock_chain, policy=standard_policy)
+    result = engine.verify(release_id=RELEASE_ID)
+
+    assert result.status == VerificationStatus.REJECT
+    assert "Conflicting artifact hashes detected" in result.explanation
+
+
+def test_insufficient_builders_reject(mock_chain, standard_policy):
+    """8.4: Insufficient builders (only 1 valid when quorum=2) -> REJECT."""
+    mock_chain.attestations[(RELEASE_ID, BUILDER_A_ADDR)] = OnChainAttestationRecord(
+        release_id=RELEASE_ID,
+        builder_address=BUILDER_A_ADDR,
+        artifact_hash=CORRECT_HASH,
+        attestation_hash="0xhash",
+        attestation_reference="ref-a",
+        timestamp=1700000100,
+        status="ACTIVE",
+    )
+
+    engine = QuorumEngine(blockchain_reader=mock_chain, policy=standard_policy)
+    result = engine.verify(release_id=RELEASE_ID)
+
+    assert result.status == VerificationStatus.REJECT
+    assert "Insufficient valid attestations" in result.explanation
+
+
+def test_official_artifact_matches_quorum_hash_accept(mock_chain, standard_policy):
+    """8.5: Official artifact matches quorum hash -> ACCEPT."""
+    real_fzf_hash = "7cb0e8d6fbf7b81cc406a7e640a6fa4b90ac0cf0ed4eebd3d1704e2779e27489"
+    for addr in [BUILDER_A_ADDR, BUILDER_B_ADDR, BUILDER_C_ADDR]:
+        mock_chain.attestations[(RELEASE_ID, addr)] = OnChainAttestationRecord(
+            release_id=RELEASE_ID,
+            builder_address=addr,
+            artifact_hash=real_fzf_hash,
+            attestation_hash="0xhash",
+            attestation_reference="ref",
+            timestamp=1700000100,
+            status="ACTIVE",
+        )
+
+    engine = QuorumEngine(blockchain_reader=mock_chain, policy=standard_policy)
+    result = engine.verify(
+        release_id=RELEASE_ID,
+        expected_artifact_hash=real_fzf_hash,  # Official artifact hash matches quorum
+    )
+
+    assert result.status == VerificationStatus.ACCEPT
+    assert result.valid_builder_count == 3
+    assert result.quorum_artifact_hash == real_fzf_hash
+
+
+def test_official_artifact_differs_from_quorum_hash_reject(mock_chain, standard_policy):
+    """8.6: Official artifact differs from quorum hash -> REJECT."""
+    real_fzf_hash = "7cb0e8d6fbf7b81cc406a7e640a6fa4b90ac0cf0ed4eebd3d1704e2779e27489"
+    diff_official_hash = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    for addr in [BUILDER_A_ADDR, BUILDER_B_ADDR, BUILDER_C_ADDR]:
+        mock_chain.attestations[(RELEASE_ID, addr)] = OnChainAttestationRecord(
+            release_id=RELEASE_ID,
+            builder_address=addr,
+            artifact_hash=real_fzf_hash,
+            attestation_hash="0xhash",
+            attestation_reference="ref",
+            timestamp=1700000100,
+            status="ACTIVE",
+        )
+
+    engine = QuorumEngine(blockchain_reader=mock_chain, policy=standard_policy)
+    result = engine.verify(
+        release_id=RELEASE_ID,
+        expected_artifact_hash=diff_official_hash,  # Official artifact differs from quorum
+    )
+
+    assert result.status == VerificationStatus.REJECT
+    assert "does not match expected artifact hash" in result.explanation
+
+
+def test_stale_hardcoded_hash_ignored_when_official_artifact_is_null(mock_chain, standard_policy):
+    """8.7: Stale/hardcoded expected hash is ignored when official_artifact is null -> ACCEPT."""
+    real_fzf_hash = "7cb0e8d6fbf7b81cc406a7e640a6fa4b90ac0cf0ed4eebd3d1704e2779e27489"
+    # Even if historical fixtures had bed775..., when expected_artifact_hash is None the real builders agree
+    for addr in [BUILDER_A_ADDR, BUILDER_B_ADDR, BUILDER_C_ADDR]:
+        mock_chain.attestations[(RELEASE_ID, addr)] = OnChainAttestationRecord(
+            release_id=RELEASE_ID,
+            builder_address=addr,
+            artifact_hash=real_fzf_hash,
+            attestation_hash="0xhash",
+            attestation_reference="ref",
+            timestamp=1700000100,
+            status="ACTIVE",
+        )
+
+    engine = QuorumEngine(blockchain_reader=mock_chain, policy=standard_policy)
+    result = engine.verify(
+        release_id=RELEASE_ID,
+        expected_artifact_hash=None,
+    )
+
+    # Must NOT compare against bed775... and MUST ACCEPT
+    assert result.status == VerificationStatus.ACCEPT
+    assert result.quorum_artifact_hash == real_fzf_hash
+

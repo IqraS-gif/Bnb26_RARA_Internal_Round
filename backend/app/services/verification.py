@@ -259,7 +259,10 @@ class VerificationService:
             progress_callback(5, "compare_hashes")
 
         official_artifact_data: Optional[Dict[str, Any]] = None
-        if request.verify_official_artifact and request.official_artifact_url:
+        effective_expected_hash: Optional[str] = request.expected_artifact_hash
+        official_artifact_download_error: Optional[str] = None
+
+        if request.official_artifact_url:
             try:
                 off_hash, off_size = download_and_hash_official_artifact(request.official_artifact_url)
                 official_artifact_data = {
@@ -268,8 +271,10 @@ class VerificationService:
                     "official_artifact_size": off_size,
                     "official_artifact_verified": True,
                 }
+                effective_expected_hash = off_hash
             except OfficialArtifactError as oae:
                 logger.warning("Official artifact download failed: %s", oae)
+                official_artifact_download_error = str(oae)
                 official_artifact_data = {
                     "official_artifact_url": request.official_artifact_url,
                     "official_artifact_error": str(oae),
@@ -289,10 +294,18 @@ class VerificationService:
             repository=canonical_url,
             release_tag=request.release_tag,
             source_commit=resolved_commit,
-            expected_artifact_hash=request.expected_artifact_hash,
+            expected_artifact_hash=effective_expected_hash,
             signed_attestations=signed_attestations if signed_attestations else None,
             verify_upstream=False,  # Already executed above for structured metadata
         )
+
+        if official_artifact_download_error is not None:
+            engine_result = engine_result.model_copy(
+                update={
+                    "status": VerificationStatus.REJECT,
+                    "explanation": f"REJECT: Failed to download official release artifact from '{request.official_artifact_url}': {official_artifact_download_error}",
+                }
+            )
 
         # Attach official artifact comparison if provided
         if official_artifact_data is not None:
@@ -324,7 +337,7 @@ class VerificationService:
                 "required_quorum": policy.required_quorum,
                 "trusted_builders": policy.trusted_builders,
             },
-            "expected_artifact_hash": request.expected_artifact_hash,
+            "expected_artifact_hash": effective_expected_hash,
             "artifact_reference": derived_artifact_ref,
             "builder_executions": builder_executions_data,
             "release_registration": release_reg_evidence,

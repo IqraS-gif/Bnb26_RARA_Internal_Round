@@ -15,7 +15,7 @@ export const FZF_DEMO_PAYLOAD = {
   repository: 'https://github.com/junegunn/fzf.git',
   release_tag: 'v0.74.4',
   source_commit: 'a140afeb4d733cad3c96a56bf6db7e26853b6757',
-  expected_artifact_hash: 'bed7753055d2c42d9c89e18b717645c9de05c8e0cc5cfb2fbf35959b9ac770a3',
+  expected_artifact_hash: null,
   artifact_reference: 'junegunn/fzf/releases/download/v0.74.4/fzf',
 };
 
