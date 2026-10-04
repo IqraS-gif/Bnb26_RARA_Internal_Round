@@ -3,7 +3,7 @@
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Callable, Optional
+from typing import Any, Callable, Dict, Optional
 
 from fastapi import HTTPException, status
 
@@ -223,7 +223,7 @@ class VerificationService:
         if progress_callback:
             progress_callback(5, "compare_hashes")
 
-        official_artifact_data = None
+        official_artifact_data: Optional[Dict[str, Any]] = None
         if request.verify_official_artifact and request.official_artifact_url:
             try:
                 off_hash, off_size = download_and_hash_official_artifact(request.official_artifact_url)
@@ -260,12 +260,13 @@ class VerificationService:
         )
 
         # Attach official artifact comparison if provided
-        if official_artifact_data:
-            if "official_artifact_hash" in official_artifact_data:
+        if official_artifact_data is not None:
+            off_h = official_artifact_data.get("official_artifact_hash")
+            if isinstance(off_h, str) and off_h:
                 quorum_h = engine_result.quorum_artifact_hash
                 matches = (
                     quorum_h is not None
-                    and official_artifact_data["official_artifact_hash"].lower() == quorum_h.lower()
+                    and off_h.lower() == quorum_h.lower()
                 )
                 official_artifact_data["matches_builder_quorum"] = matches
                 official_artifact_data["builder_quorum_hash"] = quorum_h
