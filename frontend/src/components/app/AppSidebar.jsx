@@ -6,11 +6,13 @@ export default function AppSidebar({ currentPath = '/verify', onNavigate }) {
   const isHistoryActive = currentPath === '/history' || currentPath === '/verification-history';
   const isBuilderEvidenceActive = currentPath === '/builder-evidence' || currentPath === '/evidence';
   const isBlockchainActive = currentPath === '/blockchain';
+  const isDocsActive = currentPath === '/documentation' || currentPath === '/docs';
   const isVerifyActive =
     (currentPath === '/verify' || currentPath.startsWith('/verify/')) &&
     !isHistoryActive &&
     !isBuilderEvidenceActive &&
-    !isBlockchainActive;
+    !isBlockchainActive &&
+    !isDocsActive;
 
   const navItems = [
     {
@@ -43,10 +45,10 @@ export default function AppSidebar({ currentPath = '/verify', onNavigate }) {
     },
     {
       label: 'Documentation',
-      path: '/docs',
+      path: '/documentation',
       icon: BookOpen,
-      active: false,
-      disabled: true,
+      active: isDocsActive,
+      disabled: false,
     },
     {
       label: 'Settings',
@@ -54,6 +56,7 @@ export default function AppSidebar({ currentPath = '/verify', onNavigate }) {
       icon: Settings,
       active: false,
       disabled: true,
+      badge: 'Soon',
     },
   ];
 
