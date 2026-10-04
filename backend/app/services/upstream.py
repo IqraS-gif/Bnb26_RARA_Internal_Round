@@ -236,3 +236,188 @@ def verify_release(
         verification_status=status,
         message=message,
     )
+
+
+def validate_github_repository(repository: str) -> Tuple[bool, str, str, str, Optional[str]]:
+    """Validate and normalize a public GitHub repository string.
+
+    Accepts:
+      - https://github.com/owner/repo
+      - https://github.com/owner/repo.git
+      - https://github.com/owner/repo/
+      - owner/repo
+
+    Returns:
+      Tuple of (is_valid, owner, repo_name, canonical_url, error_message)
+    """
+    if not repository or not isinstance(repository, str):
+        return False, "", "", "", "Repository URL cannot be empty."
+
+    raw = repository.strip()
+
+    # Match github.com URL or owner/repo format
+    github_url_pattern = re.compile(
+        r"^(?:https?://(?:www\.)?github\.com/)?([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git|/)?$"
+    )
+
+    match = github_url_pattern.match(raw)
+    if not match:
+        return (
+            False,
+            "",
+            "",
+            "",
+            f"Invalid GitHub repository URL '{repository}'. Expected format: https://github.com/owner/repo",
+        )
+
+    owner, repo_name = match.group(1), match.group(2)
+    # Disallow malicious paths or dot-dots
+    if ".." in owner or ".." in repo_name or "/" in owner or "/" in repo_name:
+        return False, "", "", "", "Invalid repository identifier."
+
+    canonical_url = f"https://github.com/{owner}/{repo_name}.git"
+    return True, owner, repo_name, canonical_url, None
+
+
+def resolve_tag_commit(
+    repository: str,
+    release_tag: str,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+) -> UpstreamVerificationResult:
+    """Resolve the exact immutable Git commit SHA for a release tag without prior expectation."""
+    is_valid, owner, repo_name, canonical_url, err = validate_github_repository(repository)
+    if not is_valid:
+        return UpstreamVerificationResult(
+            repository=repository or "",
+            release_tag=release_tag or "",
+            expected_commit="",
+            resolved_commit=None,
+            tag_exists=False,
+            commit_matches=False,
+            verification_status=UpstreamVerificationStatus.INVALID_REFERENCE,
+            message=err or "Invalid repository reference.",
+        )
+
+    tag_clean = release_tag.strip() if isinstance(release_tag, str) else ""
+    if not tag_clean or not _sanitize_ref(tag_clean):
+        return UpstreamVerificationResult(
+            repository=canonical_url,
+            release_tag=release_tag or "",
+            expected_commit="",
+            resolved_commit=None,
+            tag_exists=False,
+            commit_matches=False,
+            verification_status=UpstreamVerificationStatus.INVALID_REFERENCE,
+            message=f"Invalid release tag reference format: '{release_tag}'.",
+        )
+
+    tag_ref = f"refs/tags/{tag_clean}"
+    peeled_tag_ref = f"refs/tags/{tag_clean}^{{}}"
+    cmd = ["git", "ls-remote", canonical_url, tag_ref, peeled_tag_ref]
+
+    try:
+        process = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            shell=False,
+        )
+    except subprocess.TimeoutExpired:
+        return UpstreamVerificationResult(
+            repository=canonical_url,
+            release_tag=tag_clean,
+            expected_commit="",
+            resolved_commit=None,
+            tag_exists=False,
+            commit_matches=False,
+            verification_status=UpstreamVerificationStatus.UPSTREAM_UNREACHABLE,
+            message=f"Git command timed out after {timeout}s while attempting to reach repository.",
+        )
+    except Exception as exc:
+        return UpstreamVerificationResult(
+            repository=canonical_url,
+            release_tag=tag_clean,
+            expected_commit="",
+            resolved_commit=None,
+            tag_exists=False,
+            commit_matches=False,
+            verification_status=UpstreamVerificationStatus.VERIFICATION_ERROR,
+            message=f"Failed to reach repository: {exc}",
+        )
+
+    if process.returncode != 0:
+        stderr_msg = process.stderr.strip() or "Remote Git command returned non-zero exit code."
+        return UpstreamVerificationResult(
+            repository=canonical_url,
+            release_tag=tag_clean,
+            expected_commit="",
+            resolved_commit=None,
+            tag_exists=False,
+            commit_matches=False,
+            verification_status=UpstreamVerificationStatus.UPSTREAM_UNREACHABLE,
+            message=f"Unable to reach upstream repository: {stderr_msg}",
+        )
+
+    tag_commit: Optional[str] = None
+    peeled_commit: Optional[str] = None
+
+    for line in process.stdout.strip().splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 2:
+            sha, ref = parts[0].strip(), parts[1].strip()
+            if ref == peeled_tag_ref:
+                peeled_commit = sha.lower()
+            elif ref == tag_ref:
+                tag_commit = sha.lower()
+
+    resolved_commit = peeled_commit if peeled_commit is not None else tag_commit
+
+    if resolved_commit is None:
+        return UpstreamVerificationResult(
+            repository=canonical_url,
+            release_tag=tag_clean,
+            expected_commit="",
+            resolved_commit=None,
+            tag_exists=False,
+            commit_matches=False,
+            verification_status=UpstreamVerificationStatus.TAG_NOT_FOUND,
+            message=f"Release tag '{tag_clean}' not found in upstream repository.",
+        )
+
+    return UpstreamVerificationResult(
+        repository=canonical_url,
+        release_tag=tag_clean,
+        expected_commit=resolved_commit,
+        resolved_commit=resolved_commit,
+        tag_exists=True,
+        commit_matches=True,
+        verification_status=UpstreamVerificationStatus.VERIFIED,
+        message=f"Release tag '{tag_clean}' successfully resolved to commit {resolved_commit}.",
+    )
+
+
+def check_go_module_supported(owner: str, repo: str, commit_or_tag: str) -> Tuple[bool, str]:
+    """Check if repository contains a valid go.mod at the given commit/tag."""
+    import urllib.request
+    import urllib.error
+
+    raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{commit_or_tag}/go.mod"
+    req = urllib.request.Request(raw_url, headers={"User-Agent": "Quorum-Verification/1.0"})
+
+    try:
+        with urllib.request.urlopen(req, timeout=8.0) as res:
+            if res.status == 200:
+                content = res.read(512).decode("utf-8", errors="ignore")
+                if "module" in content:
+                    return True, "Go module detected."
+                return True, "go.mod found."
+    except urllib.error.HTTPError as he:
+        if he.code == 404:
+            return False, "Unsupported project type: No go.mod found. Quorum currently supports reproducible verification for Go repositories."
+    except Exception as exc:
+        logger.debug("Raw go.mod check fallback: %s", exc)
+
+    # In case raw.githubusercontent is unreachable from network, default to allowing container build stage to enforce go.mod
+    return True, "Go module check deferred to container build environment."
+

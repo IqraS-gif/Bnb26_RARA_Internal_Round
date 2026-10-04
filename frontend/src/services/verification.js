@@ -49,6 +49,75 @@ export async function runVerification(payload = FZF_DEMO_PAYLOAD) {
 }
 
 /**
+ * Start an asynchronous verification job for step-by-step progress tracking.
+ * @param {Object} payload
+ * @returns {Promise<{job_id: string, status: string}>}
+ */
+export async function startVerificationJob(payload = FZF_DEMO_PAYLOAD) {
+  try {
+    const response = await apiClient.post('/api/v1/verification/jobs', payload);
+    return response.data;
+  } catch (error) {
+    if (typeof error.response?.data?.detail === 'string') {
+      throw new Error(error.response.data.detail);
+    }
+    if (Array.isArray(error.response?.data?.detail)) {
+      const msg = error.response.data.detail
+        .map((item) => item.msg || item.message || String(item))
+        .join('; ');
+      throw new Error(`Validation Error: ${msg}`);
+    }
+    if (error.message) {
+      throw new Error(error.message);
+    }
+    throw new Error('Failed to start verification job.');
+  }
+}
+
+/**
+ * Get real-time status and stage progress of an asynchronous verification job.
+ * @param {string} jobId
+ * @returns {Promise<Object>} VerificationJobStatus
+ */
+export async function getVerificationJob(jobId) {
+  try {
+    const response = await apiClient.get(`/api/v1/verification/jobs/${jobId}`);
+    return response.data;
+  } catch (error) {
+    if (typeof error.response?.data?.detail === 'string') {
+      throw new Error(error.response.data.detail);
+    }
+    if (error.message) {
+      throw new Error(error.message);
+    }
+    throw new Error('Failed to fetch verification job status.');
+  }
+}
+
+/**
+ * Resolve release tag to commit and check ecosystem support.
+ * @param {Object} params - { repository: string, release_tag: string }
+ * @returns {Promise<Object>} { repository, release_tag, resolved_commit, is_go_supported, message }
+ */
+export async function resolveUpstreamTag({ repository, release_tag }) {
+  try {
+    const response = await apiClient.post('/api/v1/verification/resolve-tag', {
+      repository,
+      release_tag,
+    });
+    return response.data;
+  } catch (error) {
+    if (typeof error.response?.data?.detail === 'string') {
+      throw new Error(error.response.data.detail);
+    }
+    if (error.message) {
+      throw new Error(error.message);
+    }
+    throw new Error('Failed to resolve release tag.');
+  }
+}
+
+/**
  * Check health status of backend service.
  * @returns {Promise<boolean>} True if backend is reachable and healthy
  */

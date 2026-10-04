@@ -465,6 +465,7 @@ export default function VerificationResult({ verificationId, onNavigate }) {
                 expectedHash={evidence.expected_artifact_hash || summary.agreed_artifact_hash}
                 summary={summary}
                 status={status}
+                evidence={evidence}
               />
             )}
 

@@ -23,10 +23,13 @@ from app.schemas.verification import (
     VerificationResponse,
 )
 from app.services.history_service import history_service
+from app.services.upstream import resolve_tag_commit, validate_github_repository, check_go_module_supported
 from app.services.verification import VerificationService, verification_service
+from app.services.verification_jobs import VerificationJobStatus, verification_job_manager
 from app.services.verification_store import InMemoryVerificationStore, verification_store
 from quorum.blockchain import BlockchainConnectionError, ContractCallError
 from quorum.verdicts import BuilderStatus, BuilderVerificationResult, VerificationStatus
+import threading
 
 logger = logging.getLogger("quorum.api.verification")
 
@@ -44,6 +47,97 @@ def get_store() -> InMemoryVerificationStore:
 
 
 @router.post(
+    "/resolve-tag",
+    status_code=status.HTTP_200_OK,
+    summary="Resolve and Validate Upstream Tag",
+    description="Resolves the exact commit SHA from a repository release tag and checks ecosystem support.",
+)
+def resolve_tag_endpoint(payload: dict) -> dict:
+    """Quickly resolve release tag commit and check Go module support."""
+    repo = payload.get("repository", "")
+    tag = payload.get("release_tag", "")
+
+    is_valid, owner, repo_name, canonical_url, err = validate_github_repository(repo)
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=err or "Invalid GitHub repository URL.",
+        )
+
+    res = resolve_tag_commit(canonical_url, tag)
+    if not res.tag_exists or not res.resolved_commit:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=res.message or f"Release tag '{tag}' not found in repository.",
+        )
+
+    is_go, eco_msg = check_go_module_supported(owner, repo_name, res.resolved_commit)
+
+    return {
+        "repository": canonical_url,
+        "release_tag": tag,
+        "resolved_commit": res.resolved_commit,
+        "is_go_supported": is_go,
+        "message": eco_msg if not is_go else f"Tag '{tag}' resolved to commit {res.resolved_commit}.",
+    }
+
+
+@router.post(
+    "/jobs",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Start Asynchronous Verification Job",
+    description="Initiates an asynchronous verification job and returns a job_id for real-time progress tracking.",
+)
+def start_verification_job(
+    request: VerificationRequest,
+    service: VerificationService = Depends(get_service),
+) -> dict:
+    """Start asynchronous verification with real-time progress updates."""
+    job_id = verification_job_manager.create_job()
+
+    def _worker():
+        try:
+            def _on_progress(step_idx: int, stage_name: str):
+                verification_job_manager.update_progress(job_id, step_idx, stage_name)
+
+            response = service.execute_verification(request, progress_callback=_on_progress)
+            verification_job_manager.mark_completed(job_id, response)
+        except HTTPException as http_exc:
+            logger.warning("Job %s failed with HTTPException: %s", job_id, http_exc.detail)
+            verification_job_manager.mark_failed(job_id, str(http_exc.detail))
+        except Exception as exc:
+            logger.error("Job %s failed with unexpected exception: %s", job_id, exc, exc_info=True)
+            verification_job_manager.mark_failed(job_id, str(exc))
+
+    worker_thread = threading.Thread(target=_worker, daemon=True)
+    worker_thread.start()
+
+    return {
+        "job_id": job_id,
+        "status": "running",
+        "message": "Verification job started successfully.",
+    }
+
+
+@router.get(
+    "/jobs/{job_id}",
+    response_model=VerificationJobStatus,
+    status_code=status.HTTP_200_OK,
+    summary="Get Verification Job Progress",
+    description="Retrieves the real-time stage progress, status, and result of a verification job.",
+)
+def get_verification_job(job_id: str) -> VerificationJobStatus:
+    """Retrieve real-time step status for a running or completed verification job."""
+    job = verification_job_manager.get_job(job_id)
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Verification job '{job_id}' not found.",
+        )
+    return job
+
+
+@router.post(
     "/run",
     response_model=VerificationResponse,
     status_code=status.HTTP_200_OK,
@@ -57,6 +151,8 @@ def run_verification(
     """Run full deterministic verification for a release."""
     try:
         return service.execute_verification(request)
+    except HTTPException:
+        raise
     except BlockchainConnectionError as exc:
         logger.error("Blockchain connection error during verification: %s", exc)
         raise HTTPException(
@@ -73,7 +169,7 @@ def run_verification(
         logger.error("Unexpected error during verification execution: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred during verification execution.",
+            detail=f"An unexpected error occurred during verification: {exc}",
         )
 
 

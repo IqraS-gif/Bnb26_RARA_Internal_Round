@@ -15,9 +15,9 @@ from quorum.verdicts import BuilderVerificationResult, VerificationStatus
 class VerificationRequest(BaseModel):
     """Client request schema to initiate a release verification."""
 
-    release_id: str = Field(
-        ...,
-        description="Unique identifier of the software release",
+    release_id: Optional[str] = Field(
+        default=None,
+        description="Unique identifier of the software release (auto-derived if omitted)",
         examples=["fzf-v0.74.4"],
     )
     repository: str = Field(
@@ -30,9 +30,9 @@ class VerificationRequest(BaseModel):
         description="Upstream release tag name",
         examples=["v0.74.4"],
     )
-    source_commit: str = Field(
-        ...,
-        description="40-character hexadecimal source commit SHA",
+    source_commit: Optional[str] = Field(
+        default=None,
+        description="40-character hexadecimal source commit SHA (resolved from upstream if omitted)",
         examples=["a140afeb4d733cad3c96a56bf6db7e26853b6757"],
     )
     expected_artifact_hash: Optional[str] = Field(
@@ -44,6 +44,19 @@ class VerificationRequest(BaseModel):
         default=None,
         description="Optional reference name or URL for the target binary artifact",
         examples=["junegunn/fzf/releases/download/v0.74.4/fzf"],
+    )
+    official_artifact_url: Optional[str] = Field(
+        default=None,
+        description="Optional official release artifact URL to download and compare against builder quorum hash",
+        examples=["https://github.com/junegunn/fzf/releases/download/v0.74.4/fzf-0.74.4-linux_amd64.tar.gz"],
+    )
+    verify_official_artifact: Optional[bool] = Field(
+        default=False,
+        description="Flag whether to download and verify the official artifact against builder output",
+    )
+    is_arbitrary_repo: Optional[bool] = Field(
+        default=False,
+        description="Flag indicating verification of an arbitrary public repository",
     )
     demo_scenario: Optional[str] = Field(
         default="normal",
@@ -96,8 +109,10 @@ class VerificationRequest(BaseModel):
 
     @field_validator("release_id")
     @classmethod
-    def check_release_id(cls, v: str) -> str:
-        return validate_non_empty_str(v, "release_id")
+    def check_release_id(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v.strip() != "":
+            return validate_non_empty_str(v, "release_id")
+        return None
 
     @field_validator("repository")
     @classmethod
@@ -111,14 +126,23 @@ class VerificationRequest(BaseModel):
 
     @field_validator("source_commit")
     @classmethod
-    def check_source_commit(cls, v: str) -> str:
-        return validate_git_commit(v)
+    def check_source_commit(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v.strip() != "":
+            return validate_git_commit(v)
+        return None
 
     @field_validator("expected_artifact_hash")
     @classmethod
     def check_expected_artifact_hash(cls, v: Optional[str]) -> Optional[str]:
         if v is not None and v.strip() != "":
             return validate_sha256_hash(v)
+        return None
+
+    @field_validator("official_artifact_url")
+    @classmethod
+    def check_official_artifact_url(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v.strip() != "":
+            return v.strip()
         return None
 
 

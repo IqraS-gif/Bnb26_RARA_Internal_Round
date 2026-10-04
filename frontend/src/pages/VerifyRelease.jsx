@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   ExternalLink,
   Copy,
@@ -13,13 +13,26 @@ import {
   ArrowLeft,
   Box,
   Users,
+  Info,
 } from 'lucide-react';
-import { runVerification, checkBackendHealth, FZF_DEMO_PAYLOAD } from '../services/verification';
+import {
+  startVerificationJob,
+  getVerificationJob,
+  runVerification,
+  checkBackendHealth,
+  resolveUpstreamTag,
+  FZF_DEMO_PAYLOAD,
+} from '../services/verification';
 import VerificationPipeline from '../components/app/VerificationPipeline';
 import VerificationDetailsCard from '../components/app/VerificationDetailsCard';
 import VerificationScenarioSelector from '../components/app/VerificationScenarioSelector';
+import VerificationModeSwitch from '../components/app/VerificationModeSwitch';
+import ArbitraryRepositoryForm from '../components/app/ArbitraryRepositoryForm';
 
 export default function VerifyRelease({ onNavigate, currentRoute = '/verify' }) {
+  // Verification Mode: 'demo' | 'arbitrary' (Default: 'demo')
+  const [activeMode, setActiveMode] = useState('demo');
+
   // Verification State Machine: 'idle' | 'running' | 'completed' | 'error'
   const [verificationState, setVerificationState] = useState('idle');
   const [selectedScenario, setSelectedScenario] = useState('normal');
@@ -28,7 +41,22 @@ export default function VerifyRelease({ onNavigate, currentRoute = '/verify' }) 
   const [copiedCommit, setCopiedCommit] = useState(false);
   const [networkHealth, setNetworkHealth] = useState('checking'); // 'connected' | 'disconnected' | 'checking'
 
-  const commitHash = FZF_DEMO_PAYLOAD.source_commit;
+  // Job Progress Tracking
+  const [activeJobId, setActiveJobId] = useState(null);
+  const [jobSteps, setJobSteps] = useState(null);
+  const [currentStep, setCurrentStep] = useState(1);
+  const pollIntervalRef = useRef(null);
+
+  // Arbitrary Repository Form State
+  const [arbitraryRepo, setArbitraryRepo] = useState('');
+  const [arbitraryTag, setArbitraryTag] = useState('');
+  const [arbitraryCommit, setArbitraryCommit] = useState(null);
+  const [officialArtifactUrl, setOfficialArtifactUrl] = useState('');
+  const [verifyOfficialArtifact, setVerifyOfficialArtifact] = useState(false);
+  const [isResolvingTag, setIsResolvingTag] = useState(false);
+  const [tagResolutionError, setTagResolutionError] = useState(null);
+
+  const demoCommitHash = FZF_DEMO_PAYLOAD.source_commit;
 
   // Extract verification ID from route if present (e.g. /verify/:id)
   const isResultRoute = currentRoute.startsWith('/verify/') && currentRoute.length > 8;
@@ -54,9 +82,69 @@ export default function VerifyRelease({ onNavigate, currentRoute = '/verify' }) 
     };
   }, []);
 
-  const handleCopyCommit = () => {
+  // Clean up polling timer on unmount
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+    };
+  }, []);
+
+  // Debounced Tag Resolution in Arbitrary Repository Mode
+  useEffect(() => {
+    if (activeMode !== 'arbitrary') return;
+
+    const cleanRepo = arbitraryRepo.trim();
+    const cleanTag = arbitraryTag.trim();
+
+    if (!cleanRepo || !cleanTag) {
+      setArbitraryCommit(null);
+      setTagResolutionError(null);
+      return;
+    }
+
+    let isMounted = true;
+    const timer = setTimeout(async () => {
+      setIsResolvingTag(true);
+      setTagResolutionError(null);
+
+      try {
+        const res = await resolveUpstreamTag({
+          repository: cleanRepo,
+          release_tag: cleanTag,
+        });
+
+        if (isMounted) {
+          if (res.resolved_commit) {
+            setArbitraryCommit(res.resolved_commit);
+            setTagResolutionError(null);
+          } else {
+            setArbitraryCommit(null);
+            setTagResolutionError(res.message || 'Tag could not be resolved.');
+          }
+        }
+      } catch (err) {
+        if (isMounted) {
+          setArbitraryCommit(null);
+          setTagResolutionError(err.message || 'Tag resolution failed.');
+        }
+      } finally {
+        if (isMounted) {
+          setIsResolvingTag(false);
+        }
+      }
+    }, 700);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
+  }, [arbitraryRepo, arbitraryTag, activeMode]);
+
+  const handleCopyCommit = (text) => {
     try {
-      navigator.clipboard?.writeText(commitHash);
+      navigator.clipboard?.writeText(text);
       setCopiedCommit(true);
       setTimeout(() => setCopiedCommit(false), 2000);
     } catch {
@@ -68,31 +156,102 @@ export default function VerifyRelease({ onNavigate, currentRoute = '/verify' }) 
     // Protect against duplicate submissions
     if (verificationState === 'running') return;
 
-    setVerificationState('running');
     setError(null);
     setResult(null);
 
-    try {
-      const payload = {
+    // Validate inputs
+    let payload;
+    if (activeMode === 'demo') {
+      payload = {
         ...FZF_DEMO_PAYLOAD,
         demo_scenario: selectedScenario,
+        verification_mode: 'normal',
       };
-      const data = await runVerification(payload);
-      setResult(data);
-      setVerificationState('completed');
-      if (onNavigate && data?.verification_id) {
-        onNavigate(`/verify/${data.verification_id}`);
+    } else {
+      const cleanRepo = arbitraryRepo.trim();
+      const cleanTag = arbitraryTag.trim();
+
+      if (!cleanRepo) {
+        setError('Please enter a GitHub repository URL.');
+        setVerificationState('error');
+        return;
       }
+      if (!cleanTag) {
+        setError('Please enter a release tag.');
+        setVerificationState('error');
+        return;
+      }
+
+      payload = {
+        repository: cleanRepo,
+        release_tag: cleanTag,
+        source_commit: arbitraryCommit || null,
+        official_artifact_url: officialArtifactUrl.trim() || null,
+        verify_official_artifact: verifyOfficialArtifact,
+        demo_scenario: selectedScenario,
+        verification_mode: 'normal',
+        is_arbitrary_repo: true,
+      };
+    }
+
+    setVerificationState('running');
+    setJobSteps(null);
+    setCurrentStep(1);
+
+    try {
+      // 1. Initiate async verification job
+      const jobInit = await startVerificationJob(payload);
+      const jobId = jobInit.job_id;
+      setActiveJobId(jobId);
+
+      // 2. Poll job status until completed or failed
+      pollIntervalRef.current = setInterval(async () => {
+        try {
+          const job = await getVerificationJob(jobId);
+          if (job.steps) {
+            setJobSteps(job.steps);
+          }
+          if (job.current_step) {
+            setCurrentStep(job.current_step);
+          }
+
+          if (job.status === 'completed' && job.result) {
+            clearInterval(pollIntervalRef.current);
+            setResult(job.result);
+            setVerificationState('completed');
+
+            if (onNavigate && job.result?.verification_id) {
+              onNavigate(`/verify/${job.result.verification_id}`);
+            }
+          } else if (job.status === 'failed') {
+            clearInterval(pollIntervalRef.current);
+            setError(job.error || 'Verification could not be completed.');
+            setVerificationState('error');
+          }
+        } catch (pollErr) {
+          // Keep polling or report error if consecutive failures occur
+          console.warn('Polling error:', pollErr);
+        }
+      }, 500);
     } catch (err) {
-      setError(err.message || 'Verification could not be completed.');
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+      setError(err.message || 'Verification could not be initiated.');
       setVerificationState('error');
     }
   };
 
   const handleReset = () => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+    }
     setVerificationState('idle');
     setError(null);
     setResult(null);
+    setActiveJobId(null);
+    setJobSteps(null);
+    setCurrentStep(1);
   };
 
   // If viewing a specific /verify/:verificationId route placeholder
@@ -161,6 +320,24 @@ export default function VerifyRelease({ onNavigate, currentRoute = '/verify' }) 
 
   const isRunning = verificationState === 'running';
 
+  // Active details for right sidebar
+  const sidebarRepo =
+    activeMode === 'demo'
+      ? 'junegunn/fzf'
+      : arbitraryRepo.trim() || '—';
+  const sidebarTag =
+    activeMode === 'demo'
+      ? 'v0.74.4'
+      : arbitraryTag.trim() || '—';
+  const sidebarCommit =
+    activeMode === 'demo'
+      ? demoCommitHash
+      : arbitraryCommit
+      ? arbitraryCommit
+      : arbitraryRepo && arbitraryTag && isResolvingTag
+      ? 'Resolving...'
+      : 'Not resolved';
+
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto">
       
@@ -209,6 +386,20 @@ export default function VerifyRelease({ onNavigate, currentRoute = '/verify' }) 
       </div>
 
       {/* ==================================================== */}
+      {/* TWO-OPTION MODE SWITCH (DEMO vs ARBITRARY) */}
+      {/* ==================================================== */}
+      {!isRunning && (
+        <VerificationModeSwitch
+          activeMode={activeMode}
+          onSelectMode={(mode) => {
+            setActiveMode(mode);
+            setError(null);
+          }}
+          disabled={isRunning}
+        />
+      )}
+
+      {/* ==================================================== */}
       {/* MAIN TWO-COLUMN WORKSPACE GRID */}
       {/* ==================================================== */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
@@ -218,97 +409,123 @@ export default function VerifyRelease({ onNavigate, currentRoute = '/verify' }) 
         {/* ==================================================== */}
         <div className="lg:col-span-8 space-y-6">
           
-          {/* SECTION 1: VERIFICATION SCENARIO (DEMO) SELECTOR */}
+          {/* SECTION 1: SELECTED RELEASE (DEMO) OR ARBITRARY REPOSITORY FORM */}
+          {activeMode === 'demo' ? (
+            /* DEMO MODE: PRE-CONFIGURED FZF RELEASE CARD */
+            <div className="bg-white border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-2xs">
+              <div className="flex items-center justify-between gap-3 mb-4 pb-3 border-b border-slate-100">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600">
+                    <Box className="w-4.5 h-4.5 stroke-[2]" />
+                  </div>
+                  <div>
+                    <h2 className="text-sm sm:text-base font-bold text-slate-900 tracking-tight">
+                      Selected Release (Demo)
+                    </h2>
+                    <p className="text-xs text-slate-500">
+                      Using the pre-configured <span className="font-semibold text-slate-700">fzf</span> repository for demonstration.
+                    </p>
+                  </div>
+                </div>
+                <span className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-100">
+                  <Info className="w-3.5 h-3.5 text-blue-600" />
+                  <span>This scenario uses the real Docker builder environments.</span>
+                </span>
+              </div>
+
+              {/* Repo Title & Details */}
+              <div className="flex items-start gap-3.5 mb-5">
+                <div className="w-10 h-10 rounded-full bg-slate-900 text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5" aria-hidden="true">
+                    <path fillRule="evenodd" clipRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" />
+                  </svg>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-base font-bold text-slate-900 tracking-tight">
+                      junegunn/fzf
+                    </h3>
+                    <a
+                      href="https://github.com/junegunn/fzf"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs font-semibold text-blue-600 hover:text-blue-700 inline-flex items-center gap-1 group"
+                      aria-label="View junegunn/fzf repository on GitHub (opens in new tab)"
+                    >
+                      <span>View on GitHub</span>
+                      <ExternalLink className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
+                    </a>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Popular command-line fuzzy finder
+                  </p>
+                </div>
+              </div>
+
+              {/* Tag & Commit Meta Rows */}
+              <div className="space-y-3">
+                {/* Release Tag */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-slate-50/80 border border-slate-100 rounded-xl p-3">
+                  <div className="flex flex-col">
+                    <span className="text-xs font-semibold text-slate-700">Release Tag</span>
+                    <span className="text-[11px] text-slate-400">Pre-configured release tag for the demo.</span>
+                  </div>
+                  <div className="font-mono text-xs font-semibold text-slate-900 bg-white border border-slate-200/80 rounded-lg px-3 py-1 self-start sm:self-auto">
+                    v0.74.4
+                  </div>
+                </div>
+
+                {/* Source Commit */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-slate-50/80 border border-slate-100 rounded-xl p-3">
+                  <div className="flex flex-col">
+                    <span className="text-xs font-semibold text-slate-700">Source Commit</span>
+                    <span className="text-[11px] text-slate-400">Exact commit resolved from the release tag.</span>
+                  </div>
+                  <div className="flex items-center gap-2 bg-white border border-slate-200/80 rounded-lg px-3 py-1 font-mono text-[11px] text-slate-800 self-start sm:self-auto max-w-full overflow-hidden">
+                    <span className="truncate" title={demoCommitHash}>
+                      {demoCommitHash}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleCopyCommit(demoCommitHash)}
+                      className="p-1 text-slate-400 hover:text-blue-600 transition-colors shrink-0"
+                      title="Copy full commit SHA"
+                      aria-label="Copy full commit SHA"
+                    >
+                      {copiedCommit ? (
+                        <Check className="w-3.5 h-3.5 text-emerald-600" />
+                      ) : (
+                        <Copy className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            /* ARBITRARY MODE: DYNAMIC GITHUB REPOSITORY & RELEASE FORM */
+            <ArbitraryRepositoryForm
+              repository={arbitraryRepo}
+              onChangeRepository={setArbitraryRepo}
+              releaseTag={arbitraryTag}
+              onChangeReleaseTag={setArbitraryTag}
+              officialArtifactUrl={officialArtifactUrl}
+              onChangeOfficialArtifactUrl={setOfficialArtifactUrl}
+              verifyOfficialArtifact={verifyOfficialArtifact}
+              onToggleVerifyOfficialArtifact={setVerifyOfficialArtifact}
+              resolvedCommit={arbitraryCommit}
+              isResolvingTag={isResolvingTag}
+              tagResolutionError={tagResolutionError}
+              disabled={isRunning}
+            />
+          )}
+
+          {/* SECTION 2: VERIFICATION SCENARIO SELECTOR */}
           <VerificationScenarioSelector
             selectedScenario={selectedScenario}
             onSelectScenario={setSelectedScenario}
             disabled={isRunning}
           />
-
-          {/* SECTION 2: SELECTED RELEASE (DEMO) */}
-          <div className="bg-white border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-2xs">
-            <div className="flex items-center justify-between gap-3 mb-4 pb-3 border-b border-slate-100">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-lg bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600">
-                  <Box className="w-4.5 h-4.5 stroke-[2]" />
-                </div>
-                <h2 className="text-sm sm:text-base font-bold text-slate-900 tracking-tight">
-                  Selected Release (Demo)
-                </h2>
-              </div>
-              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-100">
-                Live Demonstration
-              </span>
-            </div>
-
-            {/* Repo Title & Details */}
-            <div className="flex items-start gap-3.5 mb-5">
-              <div className="w-10 h-10 rounded-full bg-slate-900 text-white flex items-center justify-center shrink-0 shadow-xs">
-                <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5" aria-hidden="true">
-                  <path fillRule="evenodd" clipRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" />
-                </svg>
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between gap-2">
-                  <h3 className="text-base font-bold text-slate-900 tracking-tight">
-                    junegunn/fzf
-                  </h3>
-                  <a
-                    href="https://github.com/junegunn/fzf"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs font-semibold text-blue-600 hover:text-blue-700 inline-flex items-center gap-1 group"
-                    aria-label="View junegunn/fzf repository on GitHub (opens in new tab)"
-                  >
-                    <span>View on GitHub</span>
-                    <ExternalLink className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
-                  </a>
-                </div>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Popular command-line fuzzy finder
-                </p>
-              </div>
-            </div>
-
-            {/* Tag & Commit Meta Rows */}
-            <div className="space-y-3">
-              {/* Release Tag */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-slate-50/80 border border-slate-100 rounded-xl p-3">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold text-slate-700">Release Tag</span>
-                </div>
-                <div className="font-mono text-xs font-semibold text-slate-900 bg-white border border-slate-200/80 rounded-lg px-3 py-1 self-start sm:self-auto">
-                  v0.74.4
-                </div>
-              </div>
-
-              {/* Source Commit */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-slate-50/80 border border-slate-100 rounded-xl p-3">
-                <div className="flex flex-col">
-                  <span className="text-xs font-semibold text-slate-700">Source Commit</span>
-                  <span className="text-[11px] text-slate-400">Exact commit resolved from the tag</span>
-                </div>
-                <div className="flex items-center gap-2 bg-white border border-slate-200/80 rounded-lg px-3 py-1 font-mono text-[11px] text-slate-800 self-start sm:self-auto max-w-full overflow-hidden">
-                  <span className="truncate" title={commitHash}>
-                    {commitHash}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={handleCopyCommit}
-                    className="p-1 text-slate-400 hover:text-blue-600 transition-colors shrink-0"
-                    title="Copy full commit SHA"
-                    aria-label="Copy full commit SHA"
-                  >
-                    {copiedCommit ? (
-                      <Check className="w-3.5 h-3.5 text-emerald-600" />
-                    ) : (
-                      <Copy className="w-3.5 h-3.5" />
-                    )}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
 
           {/* ==================================================== */}
           {/* VERIFICATION EXECUTION / RUNNING PANEL / RESULT */}
@@ -316,7 +533,10 @@ export default function VerifyRelease({ onNavigate, currentRoute = '/verify' }) 
 
           {/* 1. RUNNING STATE: RENDER CENTRAL VERIFICATION PIPELINE */}
           {isRunning && (
-            <VerificationPipeline />
+            <VerificationPipeline
+              jobSteps={jobSteps}
+              currentStep={currentStep}
+            />
           )}
 
           {/* 2. COMPLETED STATE: REAL RESULT READY BANNER */}
@@ -420,9 +640,9 @@ export default function VerifyRelease({ onNavigate, currentRoute = '/verify' }) 
           
           {/* CARD 1: VERIFICATION DETAILS */}
           <VerificationDetailsCard
-            repository="junegunn/fzf"
-            releaseTag="v0.74.4"
-            sourceCommit={commitHash}
+            repository={sidebarRepo}
+            releaseTag={sidebarTag}
+            sourceCommit={sidebarCommit}
             verificationId={result?.verification_id || null}
             isRunning={isRunning}
           />

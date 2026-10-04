@@ -50,6 +50,7 @@ typechain-types/
 *.log
 tmp/
 temp/
+scratch/
 builders/workspaces/
 backend/builders/
 artifacts/builder-a/fzf

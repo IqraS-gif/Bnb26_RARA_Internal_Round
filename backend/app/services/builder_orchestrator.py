@@ -35,7 +35,9 @@ from builders.common.identities import BUILDER_IDENTITIES, BuilderIdentity, get_
 logger = logging.getLogger("quorum.builder_orchestrator")
 
 _ROOT_DIR = Path(__file__).resolve().parent.parent.parent.parent
-_BUILD_SCRIPT_PATH = _ROOT_DIR / "builders" / "scripts" / "build_fzf.sh"
+_FZF_BUILD_SCRIPT_PATH = _ROOT_DIR / "builders" / "scripts" / "build_fzf.sh"
+_GENERIC_BUILD_SCRIPT_PATH = _ROOT_DIR / "builders" / "scripts" / "build_generic_go.sh"
+_BUILD_SCRIPT_PATH = _GENERIC_BUILD_SCRIPT_PATH if _GENERIC_BUILD_SCRIPT_PATH.exists() else _FZF_BUILD_SCRIPT_PATH
 _WORKSPACES_ROOT = _ROOT_DIR / "builders" / "workspaces"
 
 # Pinned reproducibility image and digest
@@ -142,6 +144,7 @@ class BuilderOrchestrator:
         run_id: str,
         repository: str,
         source_commit: str,
+        target_binary_name: Optional[str] = None,
         mode: str = "normal",
         simulate_failure: bool = False,
         is_divergent: bool = False,
@@ -152,11 +155,18 @@ class BuilderOrchestrator:
         output_dir = builder_workspace / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
 
+        # Infer binary name if not provided
+        if not target_binary_name:
+            repo_clean = repository.rstrip("/").removesuffix(".git").split("/")[-1]
+            target_binary_name = repo_clean or "fzf"
+
         start_time = time.time()
         logger.info(
-            "Starting builder container '%s' for builder '%s' (mode: %s, simulate_failure: %s, is_divergent: %s)...",
+            "Starting builder container '%s' for builder '%s' (repo: %s, binary: %s, mode: %s, failure: %s, divergent: %s)...",
             container_name,
             builder.name,
+            repository,
+            target_binary_name,
             mode,
             simulate_failure,
             is_divergent,
@@ -180,9 +190,9 @@ class BuilderOrchestrator:
         # Build mode flag for container script
         script_mode = "controlled_tamper" if (is_divergent or (mode == "controlled_attack" and builder.builder_id == "builder-c")) else "normal"
 
-        # Docker run arguments - strictly isolated
-        # Mount output dir and build script only
-        script_abs = str(_BUILD_SCRIPT_PATH.resolve()).replace("\\", "/")
+        # Determine which build script to use
+        script_to_use = _GENERIC_BUILD_SCRIPT_PATH if _GENERIC_BUILD_SCRIPT_PATH.exists() else _BUILD_SCRIPT_PATH
+        script_abs = str(script_to_use.resolve()).replace("\\", "/")
         output_abs = str(output_dir.resolve()).replace("\\", "/")
 
         cmd = [
@@ -191,19 +201,21 @@ class BuilderOrchestrator:
             "--name",
             container_name,
             "-v",
-            f"{script_abs}:/build/build_fzf.sh:ro",
+            f"{script_abs}:/build/build_script.sh:ro",
             "-v",
             f"{output_abs}:/build/output:rw",
             "-w",
             "/build",
             self.image,
             "bash",
-            "/build/build_fzf.sh",
+            "/build/build_script.sh",
             repository,
             source_commit,
             "/build/output",
             script_mode,
         ]
+        if target_binary_name and target_binary_name != "fzf":
+            cmd.append(target_binary_name)
 
         exit_code = -1
         logs = ""
@@ -220,8 +232,13 @@ class BuilderOrchestrator:
             logs = f"STDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
 
             if exit_code != 0:
-                error_msg = f"Container exited with code {exit_code}"
-                logger.warning("Builder %s failed with code %d", builder.name, exit_code)
+                if exit_code == 2:
+                    error_msg = "Unsupported project type: Quorum currently supports reproducible verification for Go repositories with go.mod."
+                elif exit_code == 3:
+                    error_msg = "Build recipe could not be determined: no package main found."
+                else:
+                    error_msg = f"Container build failed with exit code {exit_code}"
+                logger.warning("Builder %s failed with code %d: %s", builder.name, exit_code, error_msg)
 
         except subprocess.TimeoutExpired as exc:
             exit_code = -2
@@ -234,7 +251,7 @@ class BuilderOrchestrator:
             logs = f"ERROR: {exc}"
             logger.error("Builder %s encountered error: %s", builder.name, exc)
         finally:
-            # Keep completed containers for demonstration/inspection in Docker Desktop unless explicitly disabled
+            # Keep completed containers for demonstration/inspection unless explicitly disabled
             keep_containers = os.environ.get("KEEP_BUILDER_CONTAINERS", "true").lower() != "false"
             if not keep_containers:
                 try:
@@ -243,7 +260,7 @@ class BuilderOrchestrator:
                     pass
 
         duration = round(time.time() - start_time, 2)
-        artifact_file = output_dir / "fzf"
+        artifact_file = output_dir / target_binary_name
 
         if exit_code == 0 and artifact_file.is_file() and artifact_file.stat().st_size > 0:
             # Host independently hashes artifact
@@ -251,10 +268,30 @@ class BuilderOrchestrator:
             size_bytes = artifact_file.stat().st_size
             status = "TAMPERED_DEMO" if script_mode == "controlled_tamper" else "SUCCESS"
 
+            # Parse container metadata if written
+            build_flags = [
+                "CGO_ENABLED=0",
+                "GOOS=linux",
+                "GOARCH=amd64",
+                "-trimpath",
+                "-buildvcs=false",
+                "-mod=readonly",
+                "-a",
+                "-ldflags=-s -w",
+            ]
+            meta_file = output_dir / "build-metadata.json"
+            if meta_file.exists():
+                try:
+                    meta_json = json.loads(meta_file.read_text(encoding="utf-8"))
+                    if "buildFlags" in meta_json and isinstance(meta_json["buildFlags"], list):
+                        build_flags = meta_json["buildFlags"]
+                except Exception:
+                    pass
+
             # Copy artifact to persistent builder output folder
             persistent_artifact_dir = _ROOT_DIR / "artifacts" / builder.builder_id
             persistent_artifact_dir.mkdir(parents=True, exist_ok=True)
-            persistent_artifact_path = persistent_artifact_dir / "fzf"
+            persistent_artifact_path = persistent_artifact_dir / target_binary_name
             shutil.copy2(artifact_file, persistent_artifact_path)
 
             return BuilderExecutionResult(
@@ -269,16 +306,7 @@ class BuilderOrchestrator:
                 artifact_hash=host_hash,
                 artifact_size=size_bytes,
                 build_mode=mode,
-                build_flags=[
-                    "CGO_ENABLED=0",
-                    "GOOS=linux",
-                    "GOARCH=amd64",
-                    "-trimpath",
-                    "-buildvcs=false",
-                    "-mod=readonly",
-                    "-a",
-                    "-ldflags=-s -w -X main.version=0.74.4 -X main.revision=a140afeb",
-                ],
+                build_flags=build_flags,
                 logs=logs,
             )
         else:
@@ -302,7 +330,8 @@ class BuilderOrchestrator:
         repository: str,
         release_tag: str,
         source_commit: str,
-        artifact_reference: str = "junegunn/fzf/releases/download/v0.74.4/fzf",
+        artifact_reference: Optional[str] = None,
+        target_binary_name: Optional[str] = None,
         mode: str = "normal",
         failed_builder_id: Optional[str] = None,
         offline_builder_ids: Optional[List[str]] = None,
@@ -312,6 +341,14 @@ class BuilderOrchestrator:
         """Execute Builder A, Builder B, and Builder C concurrently in Docker."""
         builders = get_all_builder_identities()
         results_map: Dict[str, BuilderExecutionResult] = {}
+
+        # Resolve binary name
+        if not target_binary_name:
+            repo_name = repository.rstrip("/").removesuffix(".git").split("/")[-1]
+            target_binary_name = repo_name or "fzf"
+
+        if not artifact_reference:
+            artifact_reference = f"{repository.rstrip('/').removesuffix('.git')}/releases/download/{release_tag}/{target_binary_name}"
 
         # Resolve demo scenario mappings
         offline_set = set(offline_builder_ids or [])
@@ -342,10 +379,11 @@ class BuilderOrchestrator:
                 target_divergent_id = "builder-c"
 
         logger.info(
-            "Orchestrating %d builders in parallel (run_id: %s, mode: %s, scenario: %s, offline: %s, divergent: %s)...",
+            "Orchestrating %d builders in parallel (run_id: %s, repo: %s, binary: %s, scenario: %s, offline: %s, divergent: %s)...",
             len(builders),
             run_id,
-            mode,
+            repository,
+            target_binary_name,
             demo_scenario,
             offline_set,
             target_divergent_id,
@@ -375,6 +413,7 @@ class BuilderOrchestrator:
                     run_id=run_id,
                     repository=repository,
                     source_commit=source_commit,
+                    target_binary_name=target_binary_name,
                     mode=mode,
                     simulate_failure=(b.builder_id in offline_set),
                     is_divergent=(b.builder_id == target_divergent_id),
